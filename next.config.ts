@@ -9,9 +9,7 @@ const contentSecurityPolicy = [
   "img-src 'self' blob: data:",
   "font-src 'self' data:",
   "style-src 'self' 'unsafe-inline'",
-  `script-src 'self' 'unsafe-inline'${
-    process.env.NODE_ENV === "production" ? "" : " 'unsafe-eval'"
-  }`,
+  "script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval'",
   "connect-src 'self'",
   "media-src 'self' blob: data:",
   "worker-src 'self' blob:",
@@ -55,6 +53,9 @@ const securityHeaders = [
 
 const nextConfig: NextConfig = {
   typedRoutes: true,
+  outputFileTracingIncludes: {
+    "/api/opencv/runtime": ["./node_modules/@techstark/opencv-js/dist/opencv.js"]
+  },
   async headers() {
     return [
       {

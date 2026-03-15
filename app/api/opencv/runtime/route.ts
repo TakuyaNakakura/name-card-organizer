@@ -1,18 +1,13 @@
+import { createRequire } from "node:module";
 import { readFile } from "node:fs/promises";
-import path from "node:path";
 
 export const runtime = "nodejs";
 
+const require = createRequire(import.meta.url);
+const runtimeFilePath = require.resolve("@techstark/opencv-js/dist/opencv.js");
+
 export async function GET() {
-  const filePath = path.join(
-    process.cwd(),
-    "node_modules",
-    "@techstark",
-    "opencv-js",
-    "dist",
-    "opencv.js"
-  );
-  const script = await readFile(filePath, "utf8");
+  const script = await readFile(runtimeFilePath, "utf8");
 
   return new Response(script, {
     status: 200,
