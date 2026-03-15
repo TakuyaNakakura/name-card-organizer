@@ -13,5 +13,6 @@ var/uploads
 .vercel
 secrets/
 *.log
-.gitignore
-.gitignore
+.env.compose.example
+.env.example
+.env.vercel.example
