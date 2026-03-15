@@ -3,8 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "sync:opencv": "node scripts/sync-opencv-runtime.mjs",
+    "predev": "npm run sync:opencv",
     "dev": "next dev",
+    "prebuild": "npm run sync:opencv",
     "build": "next build",
+    "prestart": "npm run sync:opencv",
     "start": "next start",
     "admin:hash": "node scripts/hash-admin-password.mjs",
     "google-creds:minify": "node scripts/minify-google-credentials-json.mjs",

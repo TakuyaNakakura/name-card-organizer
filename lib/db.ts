@@ -19,6 +19,10 @@ interface CardRow {
 let sqlInstance: Sql | null = null;
 let schemaPromise: Promise<void> | null = null;
 
+function isVercelRuntime() {
+  return process.env.VERCEL === "1";
+}
+
 export function toIsoTimestamp(value: Date | string) {
   const parsed = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(parsed.getTime())) {
@@ -26,6 +30,23 @@ export function toIsoTimestamp(value: Date | string) {
   }
 
   return parsed.toISOString();
+}
+
+export function getDatabaseErrorMessage(error: unknown) {
+  if (!(error instanceof Error)) {
+    return "データベース処理に失敗しました。";
+  }
+
+  const message = error.message;
+  if (
+    /connect|connection|ECONN|ENOTFOUND|timeout|SSL|TLS|certificate|database .* does not exist|password authentication failed/i.test(
+      message
+    )
+  ) {
+    return "データベースへ接続できません。Vercel の DATABASE_URL を確認してください。";
+  }
+
+  return "データベース処理に失敗しました。";
 }
 
 function mapCardRow(row: CardRow): CardRecord {
@@ -46,8 +67,10 @@ function mapCardRow(row: CardRow): CardRecord {
 function getSql(): Sql {
   if (!sqlInstance) {
     sqlInstance = postgres(getRequiredEnv("DATABASE_URL"), {
-      max: 5,
-      idle_timeout: 20
+      max: isVercelRuntime() ? 1 : 5,
+      idle_timeout: 20,
+      connect_timeout: 15,
+      prepare: false
     });
   }
 

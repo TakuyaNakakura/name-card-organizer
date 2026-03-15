@@ -53,9 +53,6 @@ const securityHeaders = [
 
 const nextConfig: NextConfig = {
   typedRoutes: true,
-  outputFileTracingIncludes: {
-    "/api/opencv/runtime": ["./node_modules/@techstark/opencv-js/dist/opencv.js"]
-  },
   async headers() {
     return [
       {

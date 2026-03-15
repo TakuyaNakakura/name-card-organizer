@@ -110,7 +110,7 @@ async function ensureCvRuntime() {
     }
 
     const script = document.createElement("script");
-    script.src = "/api/opencv/runtime";
+    script.src = "/vendor/opencv.js";
     script.async = true;
     script.dataset.opencvRuntime = "true";
     script.addEventListener("load", handleReady, { once: true });
@@ -704,7 +704,10 @@ export function ScanWorkbench() {
       });
 
       if (!response.ok) {
-        throw new Error("保存に失敗しました");
+        const body = (await response.json().catch(() => null)) as
+          | { error?: string }
+          | null;
+        throw new Error(body?.error || "保存に失敗しました");
       }
 
       const card = (await response.json()) as CardRecord;
@@ -714,7 +717,9 @@ export function ScanWorkbench() {
     } catch (error) {
       console.error(error);
       setNetworkState("idle");
-      setSaveError("保存できませんでした。入力値を確認してください。");
+      setSaveError(
+        error instanceof Error ? error.message : "保存できませんでした。入力値を確認してください。"
+      );
     }
   }
 

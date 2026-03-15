@@ -1,8 +1,9 @@
 import Link from "next/link";
 
 import { DeleteCardButton } from "@/components/cards/delete-card-button";
-import { listCards } from "@/lib/db";
+import { getDatabaseErrorMessage, listCards } from "@/lib/db";
 import { requirePageSession } from "@/lib/http";
+import type { CardRecord } from "@/lib/types";
 
 interface CardsPageProps {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -18,7 +19,15 @@ export default async function CardsPage({ searchParams }: CardsPageProps) {
   const params = await searchParams;
   const search = readSearchParam(params.q)?.trim() ?? "";
   const highlight = readSearchParam(params.highlight) ?? "";
-  const cards = await listCards(search || undefined);
+  let cards: CardRecord[] = [];
+  let loadError: string | null = null;
+
+  try {
+    cards = await listCards(search || undefined);
+  } catch (error) {
+    console.error("Failed to render cards page", error);
+    loadError = getDatabaseErrorMessage(error);
+  }
 
   return (
     <main className="grid">
@@ -32,6 +41,7 @@ export default async function CardsPage({ searchParams }: CardsPageProps) {
 
       <section className="panel">
         <div className="panel__body stack">
+          {loadError ? <div className="status-pill status-pill--warn">{loadError}</div> : null}
           <form className="grid cards-toolbar" action="/cards" method="get">
             <div className="field">
               <label htmlFor="q">検索</label>
@@ -86,7 +96,9 @@ export default async function CardsPage({ searchParams }: CardsPageProps) {
             ) : (
               <div className="split-banner">
                 <p className="section-subtitle">
-                  保存済みの名刺はまだありません。まずはスキャン画面から 1 枚取り込んでください。
+                  {loadError
+                    ? "一覧を読み込めませんでした。DATABASE_URL と DB 接続設定を確認してください。"
+                    : "保存済みの名刺はまだありません。まずはスキャン画面から 1 枚取り込んでください。"}
                 </p>
               </div>
             )}
