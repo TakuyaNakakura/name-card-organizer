@@ -12,12 +12,21 @@ interface CardRow {
   raw_ocr_text: string;
   extraction_confidence: number;
   status: "confirmed";
-  created_at: Date;
-  updated_at: Date;
+  created_at: Date | string;
+  updated_at: Date | string;
 }
 
 let sqlInstance: Sql | null = null;
 let schemaPromise: Promise<void> | null = null;
+
+export function toIsoTimestamp(value: Date | string) {
+  const parsed = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new Error(`Invalid timestamp value: ${String(value)}`);
+  }
+
+  return parsed.toISOString();
+}
 
 function mapCardRow(row: CardRow): CardRecord {
   return {
@@ -29,8 +38,8 @@ function mapCardRow(row: CardRow): CardRecord {
     rawOcrText: row.raw_ocr_text,
     extractionConfidence: row.extraction_confidence,
     status: row.status,
-    createdAt: row.created_at.toISOString(),
-    updatedAt: row.updated_at.toISOString()
+    createdAt: toIsoTimestamp(row.created_at),
+    updatedAt: toIsoTimestamp(row.updated_at)
   };
 }
 
