@@ -19,6 +19,46 @@ interface CardRow {
 let sqlInstance: Sql | null = null;
 let schemaPromise: Promise<void> | null = null;
 
+interface LegacyColumnMapping {
+  current: string;
+  legacy: string[];
+  cast?: string;
+}
+
+const LEGACY_COLUMN_MAPPINGS: LegacyColumnMapping[] = [
+  {
+    current: "full_name",
+    legacy: ["fullName", "fullname"]
+  },
+  {
+    current: "original_image_url",
+    legacy: ["originalImageUrl", "originalimageurl"]
+  },
+  {
+    current: "corrected_image_url",
+    legacy: ["correctedImageUrl", "correctedimageurl"]
+  },
+  {
+    current: "raw_ocr_text",
+    legacy: ["rawOcrText", "rawocrtext"]
+  },
+  {
+    current: "extraction_confidence",
+    legacy: ["extractionConfidence", "extractionconfidence"],
+    cast: "real"
+  },
+  {
+    current: "created_at",
+    legacy: ["createdAt", "createdat"],
+    cast: "timestamptz"
+  },
+  {
+    current: "updated_at",
+    legacy: ["updatedAt", "updatedat"],
+    cast: "timestamptz"
+  }
+];
+
 function isVercelRuntime() {
   return process.env.VERCEL === "1";
 }
@@ -38,6 +78,47 @@ export function toIsoTimestamp(value: Date | string) {
   }
 
   return parsed.toISOString();
+}
+
+function quoteIdentifier(value: string) {
+  return `"${value.replaceAll('"', '""')}"`;
+}
+
+async function columnExists(sql: Sql, tableName: string, columnName: string) {
+  const rows = await sql<{ exists: boolean }[]>`
+    select exists (
+      select 1
+      from information_schema.columns
+      where table_schema = 'public'
+        and table_name = ${tableName}
+        and column_name = ${columnName}
+    ) as exists
+  `;
+
+  return rows[0]?.exists ?? false;
+}
+
+async function copyLegacyColumn(
+  sql: Sql,
+  currentColumn: string,
+  legacyColumn: string,
+  cast?: string
+) {
+  const legacyExists = await columnExists(sql, "cards", legacyColumn);
+  if (!legacyExists) {
+    return;
+  }
+
+  const currentIdentifier = quoteIdentifier(currentColumn);
+  const legacyIdentifier = quoteIdentifier(legacyColumn);
+  const legacyValue = cast ? `${legacyIdentifier}::${cast}` : legacyIdentifier;
+
+  await sql.unsafe(`
+    update cards
+    set ${currentIdentifier} = coalesce(${currentIdentifier}, ${legacyValue})
+    where ${currentIdentifier} is null
+      and ${legacyIdentifier} is not null
+  `);
 }
 
 function sanitizeDatabaseErrorDetail(value: string) {
@@ -170,6 +251,37 @@ async function ensureSchema() {
           created_at timestamptz not null default now(),
           updated_at timestamptz not null default now()
         )
+      `;
+      await sql`
+        alter table cards
+        add column if not exists full_name text,
+        add column if not exists original_image_url text,
+        add column if not exists corrected_image_url text,
+        add column if not exists raw_ocr_text text,
+        add column if not exists extraction_confidence real,
+        add column if not exists status text,
+        add column if not exists created_at timestamptz,
+        add column if not exists updated_at timestamptz
+      `;
+      for (const mapping of LEGACY_COLUMN_MAPPINGS) {
+        for (const legacyColumn of mapping.legacy) {
+          await copyLegacyColumn(sql, mapping.current, legacyColumn, mapping.cast);
+        }
+      }
+      await sql`
+        update cards
+        set
+          status = coalesce(status, 'confirmed'),
+          raw_ocr_text = coalesce(raw_ocr_text, ''),
+          extraction_confidence = coalesce(extraction_confidence, 0),
+          created_at = coalesce(created_at, now()),
+          updated_at = coalesce(updated_at, created_at, now())
+      `;
+      await sql`
+        alter table cards
+        alter column status set default 'confirmed',
+        alter column created_at set default now(),
+        alter column updated_at set default now()
       `;
       await sql`
         create index if not exists idx_cards_created_at
