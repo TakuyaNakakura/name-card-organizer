@@ -1,0 +1,15 @@
+.DS_Store
+.next
+node_modules
+coverage
+playwright-report
+test-results
+var/uploads
+.env
+.env.local
+.env.compose.local
+.env.vercel.local
+.env.vercel
+.vercel
+secrets/
+*.log
