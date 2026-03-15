@@ -1,7 +1,7 @@
 import postgres, { type Sql } from "postgres";
 
 import type { CardRecord } from "@/lib/types";
-import { getRequiredEnv } from "@/lib/env";
+import { getOptionalEnv, getRequiredEnv } from "@/lib/env";
 
 interface CardRow {
   id: string;
@@ -23,6 +23,14 @@ function isVercelRuntime() {
   return process.env.VERCEL === "1";
 }
 
+function getDatabaseUrl() {
+  return getRequiredEnv("DATABASE_URL");
+}
+
+export function isPlaceholderDatabaseUrl(value: string) {
+  return /:\/\/USER:PASSWORD@HOST:PORT\/DB/i.test(value);
+}
+
 export function toIsoTimestamp(value: Date | string) {
   const parsed = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(parsed.getTime())) {
@@ -32,7 +40,22 @@ export function toIsoTimestamp(value: Date | string) {
   return parsed.toISOString();
 }
 
+function sanitizeDatabaseErrorDetail(value: string) {
+  return value
+    .replace(
+      /\bpostgres(ql)?:\/\/([^:@/\s]+)(?::[^@/\s]*)?@/gi,
+      "postgres://***:***@"
+    )
+    .replace(/(password=)[^&\s]+/gi, "$1***")
+    .replace(/(api[_-]?key=)[^&\s]+/gi, "$1***");
+}
+
 export function getDatabaseErrorMessage(error: unknown) {
+  const databaseUrl = getOptionalEnv("DATABASE_URL");
+  if (databaseUrl && isPlaceholderDatabaseUrl(databaseUrl)) {
+    return "DATABASE_URL がサンプル値のままです。Vercel の環境変数を実際の接続先に置き換えてください。";
+  }
+
   if (!(error instanceof Error)) {
     return "データベース処理に失敗しました。";
   }
@@ -47,6 +70,52 @@ export function getDatabaseErrorMessage(error: unknown) {
   }
 
   return "データベース処理に失敗しました。";
+}
+
+export function getDatabaseErrorDetail(error: unknown) {
+  if (!(error instanceof Error)) {
+    return null;
+  }
+
+  return sanitizeDatabaseErrorDetail(error.message);
+}
+
+export async function checkDatabaseConnection() {
+  const databaseUrl = getDatabaseUrl();
+  if (isPlaceholderDatabaseUrl(databaseUrl)) {
+    return {
+      ok: false as const,
+      message:
+        "DATABASE_URL がサンプル値のままです。Vercel の環境変数を実際の接続先に置き換えてください。",
+      detail: sanitizeDatabaseErrorDetail(databaseUrl)
+    };
+  }
+
+  try {
+    const sql = getSql();
+    const rows = await sql<
+      { current_database: string; current_user: string; current_time: Date | string }[]
+    >`
+      select
+        current_database() as current_database,
+        current_user as current_user,
+        now() as current_time
+    `;
+    const row = rows[0];
+
+    return {
+      ok: true as const,
+      database: row.current_database,
+      user: row.current_user,
+      currentTime: toIsoTimestamp(row.current_time)
+    };
+  } catch (error) {
+    return {
+      ok: false as const,
+      message: getDatabaseErrorMessage(error),
+      detail: getDatabaseErrorDetail(error)
+    };
+  }
 }
 
 function mapCardRow(row: CardRow): CardRecord {
@@ -66,7 +135,14 @@ function mapCardRow(row: CardRow): CardRecord {
 
 function getSql(): Sql {
   if (!sqlInstance) {
-    sqlInstance = postgres(getRequiredEnv("DATABASE_URL"), {
+    const databaseUrl = getDatabaseUrl();
+    if (isPlaceholderDatabaseUrl(databaseUrl)) {
+      throw new Error(
+        "DATABASE_URL is still using the example placeholder USER:PASSWORD@HOST:PORT/DB"
+      );
+    }
+
+    sqlInstance = postgres(databaseUrl, {
       max: isVercelRuntime() ? 1 : 5,
       idle_timeout: 20,
       connect_timeout: 15,

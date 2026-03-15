@@ -705,9 +705,11 @@ export function ScanWorkbench() {
 
       if (!response.ok) {
         const body = (await response.json().catch(() => null)) as
-          | { error?: string }
+          | { error?: string; detail?: string | null }
           | null;
-        throw new Error(body?.error || "保存に失敗しました");
+        throw new Error(
+          [body?.error, body?.detail].filter(Boolean).join(" / ") || "保存に失敗しました"
+        );
       }
 
       const card = (await response.json()) as CardRecord;

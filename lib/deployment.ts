@@ -3,6 +3,7 @@ import {
   getOcrProvider,
   getStorageDriver
 } from "@/lib/env";
+import { isPlaceholderDatabaseUrl } from "@/lib/db";
 
 function hasValue(name: string) {
   return getOptionalEnv(name).length > 0;
@@ -25,6 +26,7 @@ export function getPublicDeploymentIssues() {
 
   const issues: string[] = [];
   const sessionSecret = getOptionalEnv("SESSION_SECRET");
+  const databaseUrl = getOptionalEnv("DATABASE_URL");
 
   if (process.env.E2E_BYPASS_AUTH === "true") {
     issues.push("E2E_BYPASS_AUTH must be disabled");
@@ -32,6 +34,12 @@ export function getPublicDeploymentIssues() {
 
   if (hasValue("ADMIN_PASSWORD")) {
     issues.push("ADMIN_PASSWORD must not be set for public deployment");
+  }
+
+  if (!databaseUrl) {
+    issues.push("DATABASE_URL is required for public deployment");
+  } else if (isPlaceholderDatabaseUrl(databaseUrl)) {
+    issues.push("DATABASE_URL must not use the example placeholder value");
   }
 
   if (getStorageDriver() === "local") {

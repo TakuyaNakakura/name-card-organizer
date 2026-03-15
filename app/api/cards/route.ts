@@ -2,7 +2,12 @@ import { randomUUID } from "node:crypto";
 
 import { NextResponse } from "next/server";
 
-import { getDatabaseErrorMessage, insertCard, listCards } from "@/lib/db";
+import {
+  getDatabaseErrorDetail,
+  getDatabaseErrorMessage,
+  insertCard,
+  listCards
+} from "@/lib/db";
 import { requireSession } from "@/lib/http";
 import { verifyDraftToken } from "@/lib/session";
 
@@ -29,7 +34,10 @@ export async function GET(request: Request) {
   } catch (error) {
     console.error("Failed to list cards", error);
     return NextResponse.json(
-      { error: getDatabaseErrorMessage(error) },
+      {
+        error: getDatabaseErrorMessage(error),
+        detail: getDatabaseErrorDetail(error)
+      },
       { status: 503 }
     );
   }
@@ -74,7 +82,10 @@ export async function POST(request: Request) {
     }
 
     return NextResponse.json(
-      { error: getDatabaseErrorMessage(error) },
+      {
+        error: getDatabaseErrorMessage(error),
+        detail: getDatabaseErrorDetail(error)
+      },
       { status: 503 }
     );
   }

@@ -100,6 +100,11 @@ export default async function CardsPage({ searchParams }: CardsPageProps) {
                     ? "一覧を読み込めませんでした。DATABASE_URL と DB 接続設定を確認してください。"
                     : "保存済みの名刺はまだありません。まずはスキャン画面から 1 枚取り込んでください。"}
                 </p>
+                {loadError ? (
+                  <a className="ghost-button" href="/api/health/database" rel="noreferrer">
+                    DB 接続診断 JSON
+                  </a>
+                ) : null}
               </div>
             )}
           </div>
