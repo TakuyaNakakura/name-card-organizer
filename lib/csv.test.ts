@@ -6,6 +6,8 @@ import type { CardRecord } from "@/lib/types";
 const sampleCard: CardRecord = {
   id: "1",
   fullName: "渡辺 亮",
+  organization: "株式会社サンプル 営業部",
+  jobTitle: "部長",
   email: "ryo@example.com",
   originalImageUrl: "/api/assets/drafts/1/original.jpg",
   correctedImageUrl: "/api/assets/drafts/1/corrected.jpg",
@@ -25,5 +27,7 @@ describe("cardsToCsv", () => {
     expect(csv.startsWith("\uFEFF")).toBe(true);
     expect(csv).toContain("\r\n");
     expect(csv).toContain("渡辺 亮");
+    expect(csv).toContain("株式会社サンプル 営業部");
+    expect(csv).toContain("部長");
   });
 });

@@ -16,6 +16,8 @@ export const runtime = "nodejs";
 interface CreateCardBody {
   draftToken?: string;
   fullName?: string | null;
+  organization?: string | null;
+  jobTitle?: string | null;
   email?: string;
 }
 
@@ -63,6 +65,8 @@ export async function POST(request: Request) {
     const record = await insertCard({
       id: randomUUID(),
       fullName: body.fullName?.trim() || null,
+      organization: body.organization?.trim() || null,
+      jobTitle: body.jobTitle?.trim() || null,
       email: body.email.trim(),
       originalImageUrl: draft.originalImageUrl,
       correctedImageUrl: draft.correctedImageUrl,

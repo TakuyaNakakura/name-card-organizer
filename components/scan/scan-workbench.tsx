@@ -371,6 +371,8 @@ export function ScanWorkbench() {
     "idle" | "uploading" | "saving"
   >("idle");
   const [fullName, setFullName] = useState("");
+  const [organization, setOrganization] = useState("");
+  const [jobTitle, setJobTitle] = useState("");
   const [email, setEmail] = useState("");
 
   useEffect(() => {
@@ -409,11 +411,15 @@ export function ScanWorkbench() {
   useEffect(() => {
     if (!draft) {
       setFullName("");
+      setOrganization("");
+      setJobTitle("");
       setEmail("");
       return;
     }
 
     setFullName(draft.fullName ?? "");
+    setOrganization(draft.organization ?? "");
+    setJobTitle(draft.jobTitle ?? "");
     setEmail(draft.email ?? "");
   }, [draft]);
 
@@ -699,6 +705,8 @@ export function ScanWorkbench() {
         body: JSON.stringify({
           draftToken: draft.draftToken,
           fullName: fullName.trim() || null,
+          organization: organization.trim() || null,
+          jobTitle: jobTitle.trim() || null,
           email: email.trim()
         })
       });
@@ -805,7 +813,7 @@ export function ScanWorkbench() {
           <div>
             <h2 className="section-title">2. 抽出結果を確認</h2>
             <p className="section-subtitle">
-              OCR で抽出した名前とメールアドレスを確認して保存します。
+              OCR で抽出した名前、所属、役職、メールアドレスを確認して保存します。
             </p>
           </div>
 
@@ -834,6 +842,24 @@ export function ScanWorkbench() {
                   value={fullName}
                   onChange={(event) => setFullName(event.target.value)}
                   placeholder="山田 太郎"
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="organization">所属</label>
+                <input
+                  id="organization"
+                  value={organization}
+                  onChange={(event) => setOrganization(event.target.value)}
+                  placeholder="株式会社サンプル 営業部"
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="jobTitle">役職</label>
+                <input
+                  id="jobTitle"
+                  value={jobTitle}
+                  onChange={(event) => setJobTitle(event.target.value)}
+                  placeholder="部長 / Manager"
                 />
               </div>
               <div className="field">

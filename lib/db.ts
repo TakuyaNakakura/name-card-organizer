@@ -6,7 +6,9 @@ import { getOptionalEnv, getRequiredEnv } from "@/lib/env";
 interface CardRow {
   id: string;
   full_name: string | null;
-  email: string;
+  organization: string | null;
+  job_title: string | null;
+  email: string | null;
   original_image_url: string;
   corrected_image_url: string;
   raw_ocr_text: string;
@@ -29,6 +31,25 @@ const LEGACY_COLUMN_MAPPINGS: LegacyColumnMapping[] = [
   {
     current: "full_name",
     legacy: ["fullName", "fullname"]
+  },
+  {
+    current: "organization",
+    legacy: [
+      "company",
+      "companyName",
+      "company_name",
+      "organizationName",
+      "affiliation",
+      "department"
+    ]
+  },
+  {
+    current: "job_title",
+    legacy: ["title", "jobTitle", "job_title", "position", "role"]
+  },
+  {
+    current: "email",
+    legacy: ["emailAddress", "email_address", "mail", "eMail", "emailaddress"]
   },
   {
     current: "original_image_url",
@@ -203,7 +224,9 @@ function mapCardRow(row: CardRow): CardRecord {
   return {
     id: row.id,
     fullName: row.full_name,
-    email: row.email,
+    organization: row.organization,
+    jobTitle: row.job_title,
+    email: row.email ?? "",
     originalImageUrl: row.original_image_url,
     correctedImageUrl: row.corrected_image_url,
     rawOcrText: row.raw_ocr_text,
@@ -242,6 +265,8 @@ async function ensureSchema() {
         create table if not exists cards (
           id uuid primary key,
           full_name text,
+          organization text,
+          job_title text,
           email text not null,
           original_image_url text not null,
           corrected_image_url text not null,
@@ -255,6 +280,9 @@ async function ensureSchema() {
       await sql`
         alter table cards
         add column if not exists full_name text,
+        add column if not exists organization text,
+        add column if not exists job_title text,
+        add column if not exists email text,
         add column if not exists original_image_url text,
         add column if not exists corrected_image_url text,
         add column if not exists raw_ocr_text text,
@@ -271,6 +299,7 @@ async function ensureSchema() {
       await sql`
         update cards
         set
+          email = coalesce(email, ''),
           status = coalesce(status, 'confirmed'),
           raw_ocr_text = coalesce(raw_ocr_text, ''),
           extraction_confidence = coalesce(extraction_confidence, 0),
@@ -279,6 +308,7 @@ async function ensureSchema() {
       `;
       await sql`
         alter table cards
+        alter column email set not null,
         alter column status set default 'confirmed',
         alter column created_at set default now(),
         alter column updated_at set default now()
@@ -289,7 +319,12 @@ async function ensureSchema() {
       `;
       await sql`
         create index if not exists idx_cards_search
-        on cards (lower(coalesce(full_name, '')), lower(email))
+        on cards (
+          lower(coalesce(full_name, '')),
+          lower(coalesce(organization, '')),
+          lower(coalesce(job_title, '')),
+          lower(coalesce(email, ''))
+        )
       `;
     })();
   }
@@ -300,6 +335,8 @@ async function ensureSchema() {
 export interface CreateCardInput {
   id: string;
   fullName: string | null;
+  organization: string | null;
+  jobTitle: string | null;
   email: string;
   originalImageUrl: string;
   correctedImageUrl: string;
@@ -314,6 +351,8 @@ export async function insertCard(input: CreateCardInput): Promise<CardRecord> {
     insert into cards (
       id,
       full_name,
+      organization,
+      job_title,
       email,
       original_image_url,
       corrected_image_url,
@@ -324,6 +363,8 @@ export async function insertCard(input: CreateCardInput): Promise<CardRecord> {
     values (
       ${input.id},
       ${input.fullName},
+      ${input.organization},
+      ${input.jobTitle},
       ${input.email},
       ${input.originalImageUrl},
       ${input.correctedImageUrl},
@@ -334,6 +375,8 @@ export async function insertCard(input: CreateCardInput): Promise<CardRecord> {
     returning
       id,
       full_name,
+      organization,
+      job_title,
       email,
       original_image_url,
       corrected_image_url,
@@ -356,6 +399,8 @@ export async function listCards(searchTerm?: string): Promise<CardRecord[]> {
         select
           id,
           full_name,
+          organization,
+          job_title,
           email,
           original_image_url,
           corrected_image_url,
@@ -367,13 +412,17 @@ export async function listCards(searchTerm?: string): Promise<CardRecord[]> {
         from cards
         where
           lower(coalesce(full_name, '')) like ${`%${query}%`}
-          or lower(email) like ${`%${query}%`}
+          or lower(coalesce(organization, '')) like ${`%${query}%`}
+          or lower(coalesce(job_title, '')) like ${`%${query}%`}
+          or lower(coalesce(email, '')) like ${`%${query}%`}
         order by created_at desc
       `
     : await sql<CardRow[]>`
         select
           id,
           full_name,
+          organization,
+          job_title,
           email,
           original_image_url,
           corrected_image_url,
@@ -398,6 +447,8 @@ export async function deleteCardById(cardId: string): Promise<CardRecord | null>
     returning
       id,
       full_name,
+      organization,
+      job_title,
       email,
       original_image_url,
       corrected_image_url,
