@@ -1,0 +1,14 @@
+.DS_Store
+.env
+.env.local
+.env.compose.local
+.next
+coverage
+docker-compose.google-ocr.yml
+docker-compose.yml
+node_modules
+playwright-report
+secrets
+test-results
+tests
+var/uploads

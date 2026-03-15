@@ -1,0 +1,7 @@
+services:
+  app:
+    environment:
+      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/google-vision-key.json
+    volumes:
+      - uploads_data:/app/var/uploads
+      - ${GOOGLE_APPLICATION_CREDENTIALS_HOST:?set GOOGLE_APPLICATION_CREDENTIALS_HOST to your service-account json path}:/run/secrets/google-vision-key.json:ro

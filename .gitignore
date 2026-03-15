@@ -13,3 +13,5 @@ var/uploads
 .vercel
 secrets/
 *.log
+.gitignore
+.gitignore

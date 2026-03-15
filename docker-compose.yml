@@ -1,0 +1,45 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: name_card_organizer
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "55433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d name_card_organizer"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: ${DATABASE_URL_DOCKER:-postgres://postgres:postgres@postgres:5432/name_card_organizer}
+      SESSION_SECRET: ${SESSION_SECRET:-replace-with-a-long-random-secret-at-least-32-characters}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-change-me}
+      OCR_PROVIDER: ${OCR_PROVIDER:-mock}
+      MOCK_OCR_TEXT: ${MOCK_OCR_TEXT:-Jane Doe\njane@example.com}
+      STORAGE_DRIVER: ${STORAGE_DRIVER:-local}
+      LOCAL_UPLOAD_DIR: /app/var/uploads
+      GOOGLE_CLOUD_PROJECT: ${GOOGLE_CLOUD_PROJECT:-}
+      GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS:-}
+      GOOGLE_CLOUD_CREDENTIALS_JSON: ${GOOGLE_CLOUD_CREDENTIALS_JSON:-}
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    volumes:
+      - uploads_data:/app/var/uploads
+
+volumes:
+  postgres_data:
+  uploads_data:
