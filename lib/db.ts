@@ -27,6 +27,26 @@ interface LegacyColumnMapping {
   cast?: string;
 }
 
+interface TableColumnInfo {
+  column_name: string;
+  is_nullable: "YES" | "NO";
+}
+
+const CURRENT_SCHEMA_COLUMNS = new Set([
+  "id",
+  "full_name",
+  "organization",
+  "job_title",
+  "email",
+  "original_image_url",
+  "corrected_image_url",
+  "raw_ocr_text",
+  "extraction_confidence",
+  "status",
+  "created_at",
+  "updated_at"
+]);
+
 const LEGACY_COLUMN_MAPPINGS: LegacyColumnMapping[] = [
   {
     current: "full_name",
@@ -119,6 +139,17 @@ async function columnExists(sql: Sql, tableName: string, columnName: string) {
   return rows[0]?.exists ?? false;
 }
 
+async function listTableColumns(sql: Sql, tableName: string) {
+  return sql<TableColumnInfo[]>`
+    select
+      column_name,
+      is_nullable
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = ${tableName}
+  `;
+}
+
 async function copyLegacyColumn(
   sql: Sql,
   currentColumn: string,
@@ -153,6 +184,20 @@ async function dropLegacyNotNull(sql: Sql, columnName: string) {
     alter table cards
     alter column ${identifier} drop not null
   `);
+}
+
+async function relaxUnexpectedLegacyConstraints(sql: Sql) {
+  const columns = await listTableColumns(sql, "cards");
+
+  for (const column of columns) {
+    if (
+      column.is_nullable === "NO" &&
+      column.column_name !== "id" &&
+      !CURRENT_SCHEMA_COLUMNS.has(column.column_name)
+    ) {
+      await dropLegacyNotNull(sql, column.column_name);
+    }
+  }
 }
 
 function sanitizeDatabaseErrorDetail(value: string) {
@@ -304,6 +349,7 @@ async function ensureSchema() {
         add column if not exists created_at timestamptz,
         add column if not exists updated_at timestamptz
       `;
+      await relaxUnexpectedLegacyConstraints(sql);
       for (const mapping of LEGACY_COLUMN_MAPPINGS) {
         for (const legacyColumn of mapping.legacy) {
           await dropLegacyNotNull(sql, legacyColumn);
