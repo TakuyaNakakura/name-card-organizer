@@ -9,10 +9,10 @@ interface CardRow {
   organization: string | null;
   job_title: string | null;
   email: string | null;
-  original_image_url: string;
-  corrected_image_url: string;
-  raw_ocr_text: string;
-  extraction_confidence: number;
+  original_image_url: string | null;
+  corrected_image_url: string | null;
+  raw_ocr_text: string | null;
+  extraction_confidence: number | null;
   status: "confirmed";
   created_at: Date | string;
   updated_at: Date | string;
@@ -30,7 +30,7 @@ interface LegacyColumnMapping {
 const LEGACY_COLUMN_MAPPINGS: LegacyColumnMapping[] = [
   {
     current: "full_name",
-    legacy: ["fullName", "fullname"]
+    legacy: ["name", "fullName", "fullname"]
   },
   {
     current: "organization",
@@ -142,6 +142,19 @@ async function copyLegacyColumn(
   `);
 }
 
+async function dropLegacyNotNull(sql: Sql, columnName: string) {
+  const exists = await columnExists(sql, "cards", columnName);
+  if (!exists) {
+    return;
+  }
+
+  const identifier = quoteIdentifier(columnName);
+  await sql.unsafe(`
+    alter table cards
+    alter column ${identifier} drop not null
+  `);
+}
+
 function sanitizeDatabaseErrorDetail(value: string) {
   return value
     .replace(
@@ -227,10 +240,10 @@ function mapCardRow(row: CardRow): CardRecord {
     organization: row.organization,
     jobTitle: row.job_title,
     email: row.email ?? "",
-    originalImageUrl: row.original_image_url,
-    correctedImageUrl: row.corrected_image_url,
-    rawOcrText: row.raw_ocr_text,
-    extractionConfidence: row.extraction_confidence,
+    originalImageUrl: row.original_image_url ?? "",
+    correctedImageUrl: row.corrected_image_url ?? "",
+    rawOcrText: row.raw_ocr_text ?? "",
+    extractionConfidence: row.extraction_confidence ?? 0,
     status: row.status,
     createdAt: toIsoTimestamp(row.created_at),
     updatedAt: toIsoTimestamp(row.updated_at)
@@ -293,6 +306,7 @@ async function ensureSchema() {
       `;
       for (const mapping of LEGACY_COLUMN_MAPPINGS) {
         for (const legacyColumn of mapping.legacy) {
+          await dropLegacyNotNull(sql, legacyColumn);
           await copyLegacyColumn(sql, mapping.current, legacyColumn, mapping.cast);
         }
       }

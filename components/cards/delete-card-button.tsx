@@ -28,7 +28,12 @@ export function DeleteCardButton({ cardId }: DeleteCardButtonProps) {
     });
 
     if (!response.ok) {
-      setError("削除できませんでした");
+      const body = (await response.json().catch(() => null)) as
+        | { error?: string; detail?: string | null }
+        | null;
+      setError(
+        [body?.error, body?.detail].filter(Boolean).join(" / ") || "削除できませんでした"
+      );
       return;
     }
 
