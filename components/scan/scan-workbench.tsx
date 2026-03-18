@@ -30,6 +30,9 @@ type CameraStatus =
 
 const ANALYSIS_INTERVAL_MS = 220;
 const AUTO_CAPTURE_DELAY_MS = 900;
+const MIN_CONTOUR_AREA_RATIO = 0.035;
+const MIN_ACCEPTABLE_QUAD_SCORE = 0.05;
+const APPROX_EPSILON_FACTORS = [0.015, 0.02, 0.03, 0.04];
 const MAX_UPLOAD_DIMENSION = 1800;
 const MAX_UPLOAD_BYTES = 1_800_000;
 const INITIAL_UPLOAD_QUALITY = 0.84;
@@ -191,70 +194,224 @@ function extractQuadFromApprox(approx: any): Quadrilateral | null {
   }
 }
 
+function calculatePointCentroid(points: Point[]) {
+  return points.reduce(
+    (sum, point) => ({
+      x: sum.x + point.x / points.length,
+      y: sum.y + point.y / points.length
+    }),
+    { x: 0, y: 0 }
+  );
+}
+
+function scoreQuadCandidate(quad: Quadrilateral, frameWidth: number, frameHeight: number) {
+  const baseScore = scoreQuadrilateral(quad, frameWidth, frameHeight);
+  if (baseScore <= 0) {
+    return 0;
+  }
+
+  const center = calculatePointCentroid(quad.points);
+  const normalizedDistance = Math.hypot(
+    (center.x - frameWidth / 2) / Math.max(frameWidth / 2, 1),
+    (center.y - frameHeight / 2) / Math.max(frameHeight / 2, 1)
+  );
+  const centeredBonus = Math.max(0, 1 - normalizedDistance) * 0.08;
+
+  return Number((baseScore + centeredBonus).toFixed(3));
+}
+
+function extractQuadFromMinAreaRect(cv: OpenCvModule, contour: any): Quadrilateral | null {
+  if (typeof cv.minAreaRect !== "function" || !cv.RotatedRect?.points) {
+    return null;
+  }
+
+  try {
+    const rect = cv.minAreaRect(contour);
+    const points = cv.RotatedRect.points(rect) as Point[] | undefined;
+    if (!Array.isArray(points) || points.length !== 4) {
+      return null;
+    }
+
+    return normalizeQuadrilateral(
+      points.map((point) => ({
+        x: point.x,
+        y: point.y
+      }))
+    );
+  } catch {
+    return null;
+  }
+}
+
+function extractBestQuadFromContour(
+  cv: OpenCvModule,
+  contour: any,
+  frameWidth: number,
+  frameHeight: number
+) {
+  const perimeter = cv.arcLength(contour, true);
+  let bestQuad: Quadrilateral | null = null;
+  let bestScore = 0;
+
+  for (const epsilonFactor of APPROX_EPSILON_FACTORS) {
+    const approx = new cv.Mat();
+
+    try {
+      cv.approxPolyDP(contour, approx, perimeter * epsilonFactor, true);
+
+      if (approx.rows !== 4 || !cv.isContourConvex(approx)) {
+        continue;
+      }
+
+      const quad = extractQuadFromApprox(approx);
+      if (!quad) {
+        continue;
+      }
+
+      const score = scoreQuadCandidate(quad, frameWidth, frameHeight);
+      if (score > bestScore) {
+        bestQuad = quad;
+        bestScore = score;
+      }
+    } finally {
+      approx.delete();
+    }
+  }
+
+  if (bestQuad) {
+    return { quad: bestQuad, score: bestScore };
+  }
+
+  const rotatedQuad = extractQuadFromMinAreaRect(cv, contour);
+  if (!rotatedQuad) {
+    return { quad: null, score: 0 };
+  }
+
+  return {
+    quad: rotatedQuad,
+    score: scoreQuadCandidate(rotatedQuad, frameWidth, frameHeight)
+  };
+}
+
+function detectQuadFromMask(
+  cv: OpenCvModule,
+  mask: any,
+  frameWidth: number,
+  frameHeight: number
+) {
+  const contours = new cv.MatVector();
+  const hierarchy = new cv.Mat();
+  let bestQuad: Quadrilateral | null = null;
+  let bestScore = 0;
+
+  try {
+    cv.findContours(mask, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+    for (let index = 0; index < contours.size(); index += 1) {
+      const contour = contours.get(index);
+
+      try {
+        const area = cv.contourArea(contour);
+        if (area < frameWidth * frameHeight * MIN_CONTOUR_AREA_RATIO) {
+          continue;
+        }
+
+        const candidate = extractBestQuadFromContour(cv, contour, frameWidth, frameHeight);
+        if (candidate.score > bestScore) {
+          bestQuad = candidate.quad;
+          bestScore = candidate.score;
+        }
+      } finally {
+        contour.delete();
+      }
+    }
+
+    return { quad: bestQuad, score: bestScore };
+  } finally {
+    contours.delete();
+    hierarchy.delete();
+  }
+}
+
 function detectQuad(cv: OpenCvModule, canvas: HTMLCanvasElement) {
   const src = cv.imread(canvas);
   const gray = new cv.Mat();
   const blurred = new cv.Mat();
   const edges = new cv.Mat();
-  const contours = new cv.MatVector();
-  const hierarchy = new cv.Mat();
+  const edgesStrong = new cv.Mat();
+  const mergedEdges = new cv.Mat();
+  const adaptive = new cv.Mat();
+  const kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
 
   try {
     cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
     cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0, 0, cv.BORDER_DEFAULT);
-    cv.Canny(blurred, edges, 70, 180, 3, false);
-    cv.findContours(
-      edges,
-      contours,
-      hierarchy,
-      cv.RETR_LIST,
-      cv.CHAIN_APPROX_SIMPLE
+
+    cv.Canny(blurred, edges, 35, 120, 3, false);
+    cv.Canny(blurred, edgesStrong, 60, 180, 3, false);
+    cv.bitwise_or(edges, edgesStrong, mergedEdges);
+    cv.dilate(
+      mergedEdges,
+      mergedEdges,
+      kernel,
+      new cv.Point(-1, -1),
+      1,
+      cv.BORDER_CONSTANT,
+      cv.morphologyDefaultBorderValue()
+    );
+    cv.morphologyEx(
+      mergedEdges,
+      mergedEdges,
+      cv.MORPH_CLOSE,
+      kernel,
+      new cv.Point(-1, -1),
+      2,
+      cv.BORDER_CONSTANT,
+      cv.morphologyDefaultBorderValue()
     );
 
+    cv.adaptiveThreshold(
+      blurred,
+      adaptive,
+      255,
+      cv.ADAPTIVE_THRESH_GAUSSIAN_C,
+      cv.THRESH_BINARY_INV,
+      31,
+      8
+    );
+    cv.morphologyEx(
+      adaptive,
+      adaptive,
+      cv.MORPH_CLOSE,
+      kernel,
+      new cv.Point(-1, -1),
+      2,
+      cv.BORDER_CONSTANT,
+      cv.morphologyDefaultBorderValue()
+    );
+
+    const candidates = [mergedEdges, adaptive];
     let bestQuad: Quadrilateral | null = null;
     let bestScore = 0;
 
-    for (let index = 0; index < contours.size(); index += 1) {
-      const contour = contours.get(index);
-      const approx = new cv.Mat();
-
-      try {
-        const area = cv.contourArea(contour);
-        if (area < canvas.width * canvas.height * 0.08) {
-          continue;
-        }
-
-        const perimeter = cv.arcLength(contour, true);
-        cv.approxPolyDP(contour, approx, perimeter * 0.02, true);
-
-        if (approx.rows !== 4 || !cv.isContourConvex(approx)) {
-          continue;
-        }
-
-        const quad = extractQuadFromApprox(approx);
-        if (!quad) {
-          continue;
-        }
-
-        const score = scoreQuadrilateral(quad, canvas.width, canvas.height);
-        if (score > bestScore) {
-          bestScore = score;
-          bestQuad = quad;
-        }
-      } finally {
-        contour.delete();
-        approx.delete();
+    for (const candidateMask of candidates) {
+      const { quad, score } = detectQuadFromMask(cv, candidateMask, canvas.width, canvas.height);
+      if (score > bestScore) {
+        bestQuad = quad;
+        bestScore = score;
       }
     }
 
-    return bestScore >= 0.08 ? bestQuad : null;
+    return bestScore >= MIN_ACCEPTABLE_QUAD_SCORE ? bestQuad : null;
   } finally {
     src.delete();
     gray.delete();
     blurred.delete();
     edges.delete();
-    contours.delete();
-    hierarchy.delete();
+    edgesStrong.delete();
+    mergedEdges.delete();
+    adaptive.delete();
+    kernel.delete();
   }
 }
 
