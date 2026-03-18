@@ -817,10 +817,12 @@ export function ScanWorkbench() {
     };
   }, [cameraStatus]);
 
+  const hasLockedQuad = Boolean(lockedQuad);
+
   useEffect(() => {
     if (
       cameraStatus !== "live" ||
-      !lockedQuad ||
+      !hasLockedQuad ||
       networkState !== "idle" ||
       draft ||
       autoCaptureInFlightRef.current
@@ -849,7 +851,7 @@ export function ScanWorkbench() {
         autoCaptureTimeoutRef.current = null;
       }
     };
-  }, [cameraStatus, draft, lockedQuad, networkState]);
+  }, [cameraStatus, draft, hasLockedQuad, networkState]);
 
   async function startCamera() {
     if (!navigator.mediaDevices?.getUserMedia) {
