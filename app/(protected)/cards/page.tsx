@@ -1,8 +1,9 @@
 import Link from "next/link";
 
 import { DeleteCardButton } from "@/components/cards/delete-card-button";
-import { listCards } from "@/lib/db";
+import { getDatabaseErrorMessage, listCards } from "@/lib/db";
 import { requirePageSession } from "@/lib/http";
+import type { CardRecord } from "@/lib/types";
 
 interface CardsPageProps {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -18,20 +19,29 @@ export default async function CardsPage({ searchParams }: CardsPageProps) {
   const params = await searchParams;
   const search = readSearchParam(params.q)?.trim() ?? "";
   const highlight = readSearchParam(params.highlight) ?? "";
-  const cards = await listCards(search || undefined);
+  let cards: CardRecord[] = [];
+  let loadError: string | null = null;
+
+  try {
+    cards = await listCards(search || undefined);
+  } catch (error) {
+    console.error("Failed to render cards page", error);
+    loadError = getDatabaseErrorMessage(error);
+  }
 
   return (
     <main className="grid">
       <section className="panel hero">
         <span className="brand__eyebrow">Saved Cards</span>
-        <h2 className="hero__title">保存済みの名刺一覧</h2>
-        <p className="hero__lead">
-          名前またはメールアドレスで検索できます。CSV エクスポートは現在の検索条件に追従します。
-        </p>
+            <h2 className="hero__title">保存済みの名刺一覧</h2>
+            <p className="hero__lead">
+              名前、所属、役職、メールアドレスで検索できます。CSV エクスポートは現在の検索条件に追従します。
+            </p>
       </section>
 
       <section className="panel">
         <div className="panel__body stack">
+          {loadError ? <div className="status-pill status-pill--warn">{loadError}</div> : null}
           <form className="grid cards-toolbar" action="/cards" method="get">
             <div className="field">
               <label htmlFor="q">検索</label>
@@ -39,7 +49,7 @@ export default async function CardsPage({ searchParams }: CardsPageProps) {
                 id="q"
                 name="q"
                 defaultValue={search}
-                placeholder="名前またはメールアドレス"
+                placeholder="名前、所属、役職、メールアドレス"
               />
             </div>
             <div className="inline">
@@ -65,10 +75,21 @@ export default async function CardsPage({ searchParams }: CardsPageProps) {
                   className={`card-row ${highlight === card.id ? "card-row--highlight" : ""}`}
                   key={card.id}
                 >
-                  <img alt={`${card.email} の名刺`} src={card.correctedImageUrl} />
+                  {card.correctedImageUrl ? (
+                    <img
+                      alt={`${card.email || "保存済み名刺"} の名刺`}
+                      src={card.correctedImageUrl}
+                    />
+                  ) : (
+                    <div className="preview-empty">
+                      <p>画像なし</p>
+                    </div>
+                  )}
                   <div className="card-row__meta">
                     <h3 className="card-row__title">{card.fullName || "名前未入力"}</h3>
-                    <p className="card-row__line">{card.email}</p>
+                    <p className="card-row__line">{card.organization || "所属未入力"}</p>
+                    <p className="card-row__line">{card.jobTitle || "役職未入力"}</p>
+                    <p className="card-row__line">{card.email || "メール未入力"}</p>
                     <p className="card-row__line">
                       保存日時 {new Date(card.createdAt).toLocaleString("ja-JP")}
                     </p>
@@ -86,8 +107,15 @@ export default async function CardsPage({ searchParams }: CardsPageProps) {
             ) : (
               <div className="split-banner">
                 <p className="section-subtitle">
-                  保存済みの名刺はまだありません。まずはスキャン画面から 1 枚取り込んでください。
+                  {loadError
+                    ? "一覧を読み込めませんでした。DATABASE_URL と DB 接続設定を確認してください。"
+                    : "保存済みの名刺はまだありません。まずはスキャン画面から 1 枚取り込んでください。"}
                 </p>
+                {loadError ? (
+                  <a className="ghost-button" href="/api/health/database" rel="noreferrer">
+                    DB 接続診断 JSON
+                  </a>
+                ) : null}
               </div>
             )}
           </div>

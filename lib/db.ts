@@ -1,16 +1,18 @@
 import postgres, { type Sql } from "postgres";
 
 import type { CardRecord } from "@/lib/types";
-import { getRequiredEnv } from "@/lib/env";
+import { getOptionalEnv, getRequiredEnv } from "@/lib/env";
 
 interface CardRow {
   id: string;
   full_name: string | null;
-  email: string;
-  original_image_url: string;
-  corrected_image_url: string;
-  raw_ocr_text: string;
-  extraction_confidence: number;
+  organization: string | null;
+  job_title: string | null;
+  email: string | null;
+  original_image_url: string | null;
+  corrected_image_url: string | null;
+  raw_ocr_text: string | null;
+  extraction_confidence: number | null;
   status: "confirmed";
   created_at: Date | string;
   updated_at: Date | string;
@@ -18,6 +20,97 @@ interface CardRow {
 
 let sqlInstance: Sql | null = null;
 let schemaPromise: Promise<void> | null = null;
+
+interface LegacyColumnMapping {
+  current: string;
+  legacy: string[];
+  cast?: string;
+}
+
+interface TableColumnInfo {
+  column_name: string;
+  is_nullable: "YES" | "NO";
+}
+
+const CURRENT_SCHEMA_COLUMNS = new Set([
+  "id",
+  "full_name",
+  "organization",
+  "job_title",
+  "email",
+  "original_image_url",
+  "corrected_image_url",
+  "raw_ocr_text",
+  "extraction_confidence",
+  "status",
+  "created_at",
+  "updated_at"
+]);
+
+const LEGACY_COLUMN_MAPPINGS: LegacyColumnMapping[] = [
+  {
+    current: "full_name",
+    legacy: ["name", "fullName", "fullname"]
+  },
+  {
+    current: "organization",
+    legacy: [
+      "company",
+      "companyName",
+      "company_name",
+      "organizationName",
+      "affiliation",
+      "department"
+    ]
+  },
+  {
+    current: "job_title",
+    legacy: ["title", "jobTitle", "job_title", "position", "role"]
+  },
+  {
+    current: "email",
+    legacy: ["emailAddress", "email_address", "mail", "eMail", "emailaddress"]
+  },
+  {
+    current: "original_image_url",
+    legacy: ["originalImageUrl", "originalimageurl"]
+  },
+  {
+    current: "corrected_image_url",
+    legacy: ["correctedImageUrl", "correctedimageurl"]
+  },
+  {
+    current: "raw_ocr_text",
+    legacy: ["rawOcrText", "rawocrtext"]
+  },
+  {
+    current: "extraction_confidence",
+    legacy: ["extractionConfidence", "extractionconfidence"],
+    cast: "real"
+  },
+  {
+    current: "created_at",
+    legacy: ["createdAt", "createdat"],
+    cast: "timestamptz"
+  },
+  {
+    current: "updated_at",
+    legacy: ["updatedAt", "updatedat"],
+    cast: "timestamptz"
+  }
+];
+
+function isVercelRuntime() {
+  return process.env.VERCEL === "1";
+}
+
+function getDatabaseUrl() {
+  return getRequiredEnv("DATABASE_URL");
+}
+
+export function isPlaceholderDatabaseUrl(value: string) {
+  return /:\/\/USER:PASSWORD@HOST:PORT\/DB/i.test(value);
+}
 
 export function toIsoTimestamp(value: Date | string) {
   const parsed = value instanceof Date ? value : new Date(value);
@@ -28,15 +121,174 @@ export function toIsoTimestamp(value: Date | string) {
   return parsed.toISOString();
 }
 
+function quoteIdentifier(value: string) {
+  return `"${value.replaceAll('"', '""')}"`;
+}
+
+async function columnExists(sql: Sql, tableName: string, columnName: string) {
+  const rows = await sql<{ exists: boolean }[]>`
+    select exists (
+      select 1
+      from information_schema.columns
+      where table_schema = 'public'
+        and table_name = ${tableName}
+        and column_name = ${columnName}
+    ) as exists
+  `;
+
+  return rows[0]?.exists ?? false;
+}
+
+async function listTableColumns(sql: Sql, tableName: string) {
+  return sql<TableColumnInfo[]>`
+    select
+      column_name,
+      is_nullable
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = ${tableName}
+  `;
+}
+
+async function copyLegacyColumn(
+  sql: Sql,
+  currentColumn: string,
+  legacyColumn: string,
+  cast?: string
+) {
+  const legacyExists = await columnExists(sql, "cards", legacyColumn);
+  if (!legacyExists) {
+    return;
+  }
+
+  const currentIdentifier = quoteIdentifier(currentColumn);
+  const legacyIdentifier = quoteIdentifier(legacyColumn);
+  const legacyValue = cast ? `${legacyIdentifier}::${cast}` : legacyIdentifier;
+
+  await sql.unsafe(`
+    update cards
+    set ${currentIdentifier} = coalesce(${currentIdentifier}, ${legacyValue})
+    where ${currentIdentifier} is null
+      and ${legacyIdentifier} is not null
+  `);
+}
+
+async function dropLegacyNotNull(sql: Sql, columnName: string) {
+  const exists = await columnExists(sql, "cards", columnName);
+  if (!exists) {
+    return;
+  }
+
+  const identifier = quoteIdentifier(columnName);
+  await sql.unsafe(`
+    alter table cards
+    alter column ${identifier} drop not null
+  `);
+}
+
+async function relaxUnexpectedLegacyConstraints(sql: Sql) {
+  const columns = await listTableColumns(sql, "cards");
+
+  for (const column of columns) {
+    if (
+      column.is_nullable === "NO" &&
+      column.column_name !== "id" &&
+      !CURRENT_SCHEMA_COLUMNS.has(column.column_name)
+    ) {
+      await dropLegacyNotNull(sql, column.column_name);
+    }
+  }
+}
+
+function sanitizeDatabaseErrorDetail(value: string) {
+  return value
+    .replace(
+      /\bpostgres(ql)?:\/\/([^:@/\s]+)(?::[^@/\s]*)?@/gi,
+      "postgres://***:***@"
+    )
+    .replace(/(password=)[^&\s]+/gi, "$1***")
+    .replace(/(api[_-]?key=)[^&\s]+/gi, "$1***");
+}
+
+export function getDatabaseErrorMessage(error: unknown) {
+  const databaseUrl = getOptionalEnv("DATABASE_URL");
+  if (databaseUrl && isPlaceholderDatabaseUrl(databaseUrl)) {
+    return "DATABASE_URL がサンプル値のままです。Vercel の環境変数を実際の接続先に置き換えてください。";
+  }
+
+  if (!(error instanceof Error)) {
+    return "データベース処理に失敗しました。";
+  }
+
+  const message = error.message;
+  if (
+    /connect|connection|ECONN|ENOTFOUND|timeout|SSL|TLS|certificate|database .* does not exist|password authentication failed/i.test(
+      message
+    )
+  ) {
+    return "データベースへ接続できません。Vercel の DATABASE_URL を確認してください。";
+  }
+
+  return "データベース処理に失敗しました。";
+}
+
+export function getDatabaseErrorDetail(error: unknown) {
+  if (!(error instanceof Error)) {
+    return null;
+  }
+
+  return sanitizeDatabaseErrorDetail(error.message);
+}
+
+export async function checkDatabaseConnection() {
+  const databaseUrl = getDatabaseUrl();
+  if (isPlaceholderDatabaseUrl(databaseUrl)) {
+    return {
+      ok: false as const,
+      message:
+        "DATABASE_URL がサンプル値のままです。Vercel の環境変数を実際の接続先に置き換えてください。",
+      detail: sanitizeDatabaseErrorDetail(databaseUrl)
+    };
+  }
+
+  try {
+    const sql = getSql();
+    const rows = await sql<
+      { current_database: string; current_user: string; current_time: Date | string }[]
+    >`
+      select
+        current_database() as current_database,
+        current_user as current_user,
+        now() as current_time
+    `;
+    const row = rows[0];
+
+    return {
+      ok: true as const,
+      database: row.current_database,
+      user: row.current_user,
+      currentTime: toIsoTimestamp(row.current_time)
+    };
+  } catch (error) {
+    return {
+      ok: false as const,
+      message: getDatabaseErrorMessage(error),
+      detail: getDatabaseErrorDetail(error)
+    };
+  }
+}
+
 function mapCardRow(row: CardRow): CardRecord {
   return {
     id: row.id,
     fullName: row.full_name,
-    email: row.email,
-    originalImageUrl: row.original_image_url,
-    correctedImageUrl: row.corrected_image_url,
-    rawOcrText: row.raw_ocr_text,
-    extractionConfidence: row.extraction_confidence,
+    organization: row.organization,
+    jobTitle: row.job_title,
+    email: row.email ?? "",
+    originalImageUrl: row.original_image_url ?? "",
+    correctedImageUrl: row.corrected_image_url ?? "",
+    rawOcrText: row.raw_ocr_text ?? "",
+    extractionConfidence: row.extraction_confidence ?? 0,
     status: row.status,
     createdAt: toIsoTimestamp(row.created_at),
     updatedAt: toIsoTimestamp(row.updated_at)
@@ -45,9 +297,18 @@ function mapCardRow(row: CardRow): CardRecord {
 
 function getSql(): Sql {
   if (!sqlInstance) {
-    sqlInstance = postgres(getRequiredEnv("DATABASE_URL"), {
-      max: 5,
-      idle_timeout: 20
+    const databaseUrl = getDatabaseUrl();
+    if (isPlaceholderDatabaseUrl(databaseUrl)) {
+      throw new Error(
+        "DATABASE_URL is still using the example placeholder USER:PASSWORD@HOST:PORT/DB"
+      );
+    }
+
+    sqlInstance = postgres(databaseUrl, {
+      max: isVercelRuntime() ? 1 : 5,
+      idle_timeout: 20,
+      connect_timeout: 15,
+      prepare: false
     });
   }
 
@@ -62,6 +323,8 @@ async function ensureSchema() {
         create table if not exists cards (
           id uuid primary key,
           full_name text,
+          organization text,
+          job_title text,
           email text not null,
           original_image_url text not null,
           corrected_image_url text not null,
@@ -73,12 +336,55 @@ async function ensureSchema() {
         )
       `;
       await sql`
+        alter table cards
+        add column if not exists full_name text,
+        add column if not exists organization text,
+        add column if not exists job_title text,
+        add column if not exists email text,
+        add column if not exists original_image_url text,
+        add column if not exists corrected_image_url text,
+        add column if not exists raw_ocr_text text,
+        add column if not exists extraction_confidence real,
+        add column if not exists status text,
+        add column if not exists created_at timestamptz,
+        add column if not exists updated_at timestamptz
+      `;
+      await relaxUnexpectedLegacyConstraints(sql);
+      for (const mapping of LEGACY_COLUMN_MAPPINGS) {
+        for (const legacyColumn of mapping.legacy) {
+          await dropLegacyNotNull(sql, legacyColumn);
+          await copyLegacyColumn(sql, mapping.current, legacyColumn, mapping.cast);
+        }
+      }
+      await sql`
+        update cards
+        set
+          email = coalesce(email, ''),
+          status = coalesce(status, 'confirmed'),
+          raw_ocr_text = coalesce(raw_ocr_text, ''),
+          extraction_confidence = coalesce(extraction_confidence, 0),
+          created_at = coalesce(created_at, now()),
+          updated_at = coalesce(updated_at, created_at, now())
+      `;
+      await sql`
+        alter table cards
+        alter column email set not null,
+        alter column status set default 'confirmed',
+        alter column created_at set default now(),
+        alter column updated_at set default now()
+      `;
+      await sql`
         create index if not exists idx_cards_created_at
         on cards (created_at desc)
       `;
       await sql`
         create index if not exists idx_cards_search
-        on cards (lower(coalesce(full_name, '')), lower(email))
+        on cards (
+          lower(coalesce(full_name, '')),
+          lower(coalesce(organization, '')),
+          lower(coalesce(job_title, '')),
+          lower(coalesce(email, ''))
+        )
       `;
     })();
   }
@@ -89,6 +395,8 @@ async function ensureSchema() {
 export interface CreateCardInput {
   id: string;
   fullName: string | null;
+  organization: string | null;
+  jobTitle: string | null;
   email: string;
   originalImageUrl: string;
   correctedImageUrl: string;
@@ -103,6 +411,8 @@ export async function insertCard(input: CreateCardInput): Promise<CardRecord> {
     insert into cards (
       id,
       full_name,
+      organization,
+      job_title,
       email,
       original_image_url,
       corrected_image_url,
@@ -113,6 +423,8 @@ export async function insertCard(input: CreateCardInput): Promise<CardRecord> {
     values (
       ${input.id},
       ${input.fullName},
+      ${input.organization},
+      ${input.jobTitle},
       ${input.email},
       ${input.originalImageUrl},
       ${input.correctedImageUrl},
@@ -123,6 +435,8 @@ export async function insertCard(input: CreateCardInput): Promise<CardRecord> {
     returning
       id,
       full_name,
+      organization,
+      job_title,
       email,
       original_image_url,
       corrected_image_url,
@@ -145,6 +459,8 @@ export async function listCards(searchTerm?: string): Promise<CardRecord[]> {
         select
           id,
           full_name,
+          organization,
+          job_title,
           email,
           original_image_url,
           corrected_image_url,
@@ -156,13 +472,17 @@ export async function listCards(searchTerm?: string): Promise<CardRecord[]> {
         from cards
         where
           lower(coalesce(full_name, '')) like ${`%${query}%`}
-          or lower(email) like ${`%${query}%`}
+          or lower(coalesce(organization, '')) like ${`%${query}%`}
+          or lower(coalesce(job_title, '')) like ${`%${query}%`}
+          or lower(coalesce(email, '')) like ${`%${query}%`}
         order by created_at desc
       `
     : await sql<CardRow[]>`
         select
           id,
           full_name,
+          organization,
+          job_title,
           email,
           original_image_url,
           corrected_image_url,
@@ -187,6 +507,8 @@ export async function deleteCardById(cardId: string): Promise<CardRecord | null>
     returning
       id,
       full_name,
+      organization,
+      job_title,
       email,
       original_image_url,
       corrected_image_url,

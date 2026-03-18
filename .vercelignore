@@ -2,6 +2,7 @@
 .env
 .env.local
 .env.compose.local
+.env.vercel
 .next
 coverage
 docker-compose.google-ocr.yml

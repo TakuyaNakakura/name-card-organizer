@@ -3,6 +3,8 @@ export type CardStatus = "confirmed";
 export interface CardRecord {
   id: string;
   fullName: string | null;
+  organization: string | null;
+  jobTitle: string | null;
   email: string;
   originalImageUrl: string;
   correctedImageUrl: string;
@@ -19,6 +21,8 @@ export interface CardDraft {
   originalImageUrl: string;
   correctedImageUrl: string;
   fullName: string | null;
+  organization: string | null;
+  jobTitle: string | null;
   email: string | null;
   confidence: number;
   warnings: string[];
@@ -31,6 +35,8 @@ export interface CardDraftTokenPayload {
   rawOcrText: string;
   confidence: number;
   suggestedFullName: string | null;
+  suggestedOrganization: string | null;
+  suggestedJobTitle: string | null;
   suggestedEmail: string | null;
 }
 
@@ -55,6 +61,8 @@ export interface OcrResult {
 
 export interface ContactExtractionResult {
   fullName: string | null;
+  organization: string | null;
+  jobTitle: string | null;
   email: string | null;
   confidence: number;
   warnings: string[];

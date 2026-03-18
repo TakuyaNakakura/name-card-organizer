@@ -15,6 +15,8 @@ export function cardsToCsv(cards: CardRecord[], options: CsvOptions = {}) {
   const header = [
     "id",
     "full_name",
+    "organization",
+    "job_title",
     "email",
     "corrected_image_url",
     "created_at"
@@ -23,6 +25,8 @@ export function cardsToCsv(cards: CardRecord[], options: CsvOptions = {}) {
     [
       escapeCsv(card.id),
       escapeCsv(card.fullName),
+      escapeCsv(card.organization),
+      escapeCsv(card.jobTitle),
       escapeCsv(card.email),
       escapeCsv(card.correctedImageUrl),
       escapeCsv(card.createdAt)

@@ -36,18 +36,33 @@ describe("scanBusinessCard", () => {
 
   it("stores images and returns a draft with extracted contact fields", async () => {
     mocks.recognize.mockResolvedValue({
-      rawText: "Jane Doe\njane@example.com",
+      rawText: "ACME Inc.\nPlatform Division\nHead of Sales\nJane Doe\njane@example.com",
       overallConfidence: 0.91,
       blocks: [
         {
+          text: "ACME Inc.",
+          confidence: 0.95,
+          bounds: { x: 30, y: 12, width: 220, height: 28 }
+        },
+        {
+          text: "Platform Division",
+          confidence: 0.94,
+          bounds: { x: 30, y: 44, width: 220, height: 26 }
+        },
+        {
+          text: "Head of Sales",
+          confidence: 0.95,
+          bounds: { x: 30, y: 74, width: 220, height: 28 }
+        },
+        {
           text: "Jane Doe",
           confidence: 0.97,
-          bounds: { x: 30, y: 20, width: 180, height: 40 }
+          bounds: { x: 30, y: 108, width: 180, height: 40 }
         },
         {
           text: "jane@example.com",
           confidence: 0.99,
-          bounds: { x: 30, y: 90, width: 220, height: 24 }
+          bounds: { x: 30, y: 154, width: 220, height: 24 }
         }
       ]
     });
@@ -68,6 +83,8 @@ describe("scanBusinessCard", () => {
     expect(draft).toMatchObject({
       draftToken: "draft-token",
       fullName: "Jane Doe",
+      organization: "ACME Inc. Platform Division",
+      jobTitle: "Head of Sales",
       email: "jane@example.com",
       tempImageUrl: expect.stringContaining("/api/assets/drafts/")
     });

@@ -158,7 +158,11 @@ export function buildAssetUrl(key: string) {
   return `/api/assets/${key}`;
 }
 
-export function extractStorageKeyFromAssetUrl(assetUrl: string) {
+export function extractStorageKeyFromAssetUrl(assetUrl: string | null | undefined) {
+  if (!assetUrl) {
+    return null;
+  }
+
   const prefix = "/api/assets/";
 
   if (assetUrl.startsWith(prefix)) {

@@ -61,6 +61,8 @@ export async function scanBusinessCard(payload: ScanPayload): Promise<CardDraft>
     rawOcrText: ocrResult.rawText,
     confidence: extraction.confidence,
     suggestedFullName: extraction.fullName,
+    suggestedOrganization: extraction.organization,
+    suggestedJobTitle: extraction.jobTitle,
     suggestedEmail: extraction.email
   });
 
@@ -70,6 +72,8 @@ export async function scanBusinessCard(payload: ScanPayload): Promise<CardDraft>
     originalImageUrl,
     correctedImageUrl,
     fullName: extraction.fullName,
+    organization: extraction.organization,
+    jobTitle: extraction.jobTitle,
     email: extraction.email,
     confidence: extraction.confidence,
     warnings: extraction.warnings,
