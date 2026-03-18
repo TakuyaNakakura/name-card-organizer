@@ -396,6 +396,27 @@ function quadToPolygon(quad: Quadrilateral | null) {
   return quad.points.map((point) => `${point.x},${point.y}`).join(" ");
 }
 
+function mapQuadToPreviewDisplay(
+  quad: Quadrilateral,
+  sourceWidth: number,
+  sourceHeight: number,
+  frameWidth: number,
+  frameHeight: number
+): Quadrilateral {
+  const scale = Math.min(frameWidth / Math.max(sourceWidth, 1), frameHeight / Math.max(sourceHeight, 1));
+  const renderedWidth = sourceWidth * scale;
+  const renderedHeight = sourceHeight * scale;
+  const offsetX = (frameWidth - renderedWidth) / 2;
+  const offsetY = (frameHeight - renderedHeight) / 2;
+
+  return {
+    points: quad.points.map((point) => ({
+      x: point.x * scale + offsetX,
+      y: point.y * scale + offsetY
+    })) as [Point, Point, Point, Point]
+  };
+}
+
 function canRetryCameraRequest(error: unknown) {
   return (
     error instanceof DOMException &&
@@ -449,6 +470,7 @@ function getCameraFailureMessage(error: unknown) {
 
 export function ScanWorkbench() {
   const router = useRouter();
+  const previewFrameRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const analysisCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -475,6 +497,39 @@ export function ScanWorkbench() {
   const [organization, setOrganization] = useState("");
   const [jobTitle, setJobTitle] = useState("");
   const [email, setEmail] = useState("");
+  const [previewSize, setPreviewSize] = useState({ width: 640, height: 480 });
+
+  useEffect(() => {
+    const frame = previewFrameRef.current;
+    if (!frame) {
+      return;
+    }
+
+    const updateSize = () => {
+      setPreviewSize({
+        width: Math.max(Math.round(frame.clientWidth), 1),
+        height: Math.max(Math.round(frame.clientHeight), 1)
+      });
+    };
+
+    updateSize();
+
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", updateSize);
+      return () => {
+        window.removeEventListener("resize", updateSize);
+      };
+    }
+
+    const observer = new ResizeObserver(() => {
+      updateSize();
+    });
+    observer.observe(frame);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -888,6 +943,17 @@ export function ScanWorkbench() {
     }
   }
 
+  const activeQuad = lockedQuad ?? liveQuad;
+  const overlayQuad = activeQuad
+    ? mapQuadToPreviewDisplay(
+        activeQuad,
+        analysisCanvasRef.current?.width || 640,
+        analysisCanvasRef.current?.height || 480,
+        previewSize.width,
+        previewSize.height
+      )
+    : null;
+
   return (
     <div className="grid grid--two">
       <section className="panel">
@@ -898,7 +964,7 @@ export function ScanWorkbench() {
               カメラで名刺を画面いっぱいに収めると、輪郭を検出して自動撮影します。
             </p>
           </div>
-          <div className="preview-frame">
+          <div className="preview-frame" ref={previewFrameRef}>
             <video
               ref={videoRef}
               autoPlay
@@ -923,14 +989,10 @@ export function ScanWorkbench() {
             )}
             <svg
               className="preview-overlay"
-              viewBox={`0 0 ${analysisCanvasRef.current?.width || 640} ${
-                analysisCanvasRef.current?.height || 480
-              }`}
+              viewBox={`0 0 ${previewSize.width} ${previewSize.height}`}
               preserveAspectRatio="none"
             >
-              {(lockedQuad ?? liveQuad) ? (
-                <polygon points={quadToPolygon(lockedQuad ?? liveQuad)} />
-              ) : null}
+              {overlayQuad ? <polygon points={quadToPolygon(overlayQuad)} /> : null}
             </svg>
           </div>
           <canvas ref={analysisCanvasRef} hidden />
