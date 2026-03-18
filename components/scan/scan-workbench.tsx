@@ -65,9 +65,11 @@ const CAMERA_CONSTRAINT_CANDIDATES: MediaStreamConstraints[] = [
 
 declare global {
   interface Window {
-    cv?: OpenCvModule;
+    cv?: OpenCvModule | Promise<OpenCvModule>;
   }
 }
+
+let cvRuntimePromise: Promise<OpenCvModule> | null = null;
 
 function toBlob(
   canvas: HTMLCanvasElement,
@@ -94,33 +96,50 @@ async function loadImageElement(file: File) {
   return { image, objectUrl };
 }
 
-async function ensureCvRuntime() {
-  if (window.cv && typeof window.cv.getBuildInformation === "function") {
-    return window.cv;
+function isOpenCvModule(value: unknown): value is OpenCvModule {
+  return Boolean(value) && typeof (value as OpenCvModule).getBuildInformation === "function";
+}
+
+function isPromiseLike<T>(value: unknown): value is Promise<T> {
+  return Boolean(value) && typeof (value as Promise<T>).then === "function";
+}
+
+async function resolveOpenCvModule(candidate: unknown) {
+  if (isOpenCvModule(candidate)) {
+    window.cv = candidate;
+    return candidate;
   }
 
-  await new Promise<void>((resolve, reject) => {
+  if (isPromiseLike<OpenCvModule>(candidate)) {
+    const module = await candidate;
+    if (!isOpenCvModule(module)) {
+      throw new Error("OpenCV runtime resolved without expected API");
+    }
+
+    window.cv = module;
+    return module;
+  }
+
+  throw new Error("OpenCV runtime did not initialize");
+}
+
+async function ensureCvRuntime() {
+  if (cvRuntimePromise) {
+    return cvRuntimePromise;
+  }
+
+  if (window.cv) {
+    cvRuntimePromise = resolveOpenCvModule(window.cv);
+    return cvRuntimePromise;
+  }
+
+  cvRuntimePromise = new Promise<OpenCvModule>((resolve, reject) => {
     const existingScript = document.querySelector<HTMLScriptElement>(
       'script[data-opencv-runtime="true"]'
     );
 
     const handleReady = () => {
-      const cv = window.cv;
-      if (!cv) {
-        reject(new Error("OpenCV runtime did not initialize"));
-        return;
-      }
-
-      if (typeof cv.getBuildInformation === "function") {
-        resolve();
-        return;
-      }
-
-      const previous = cv.onRuntimeInitialized;
-      cv.onRuntimeInitialized = () => {
-        previous?.();
-        resolve();
-      };
+      void resolveOpenCvModule(window.cv).then(resolve).catch(reject);
     };
 
     if (existingScript) {
@@ -151,7 +170,7 @@ async function ensureCvRuntime() {
     document.body.append(script);
   });
 
-  return window.cv as OpenCvModule;
+  return cvRuntimePromise;
 }
 
 function extractQuadFromApprox(approx: any): Quadrilateral | null {
