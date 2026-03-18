@@ -29,6 +29,7 @@ type CameraStatus =
   | "error";
 
 const ANALYSIS_INTERVAL_MS = 220;
+const AUTO_CAPTURE_DELAY_MS = 900;
 const MAX_UPLOAD_DIMENSION = 1800;
 const MAX_UPLOAD_BYTES = 1_800_000;
 const INITIAL_UPLOAD_QUALITY = 0.84;
@@ -433,6 +434,8 @@ export function ScanWorkbench() {
   const analysisCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const frameHandleRef = useRef<number | null>(null);
+  const autoCaptureTimeoutRef = useRef<number | null>(null);
+  const autoCaptureInFlightRef = useRef(false);
   const lastAnalysisAtRef = useRef(0);
   const lastQuadRef = useRef<Quadrilateral | null>(null);
   const stableCountRef = useRef(0);
@@ -479,6 +482,10 @@ export function ScanWorkbench() {
 
   useEffect(() => {
     return () => {
+      if (autoCaptureTimeoutRef.current) {
+        window.clearTimeout(autoCaptureTimeoutRef.current);
+      }
+
       if (frameHandleRef.current) {
         cancelAnimationFrame(frameHandleRef.current);
       }
@@ -512,6 +519,10 @@ export function ScanWorkbench() {
 
   useEffect(() => {
     if (cameraStatus !== "live") {
+      if (autoCaptureTimeoutRef.current) {
+        window.clearTimeout(autoCaptureTimeoutRef.current);
+        autoCaptureTimeoutRef.current = null;
+      }
       return;
     }
 
@@ -575,6 +586,40 @@ export function ScanWorkbench() {
     };
   }, [cameraStatus]);
 
+  useEffect(() => {
+    if (
+      cameraStatus !== "live" ||
+      !lockedQuad ||
+      networkState !== "idle" ||
+      draft ||
+      autoCaptureInFlightRef.current
+    ) {
+      if (autoCaptureTimeoutRef.current) {
+        window.clearTimeout(autoCaptureTimeoutRef.current);
+        autoCaptureTimeoutRef.current = null;
+      }
+      return;
+    }
+
+    setCameraMessage("名刺枠をロックしました。まもなく自動撮影します。");
+    autoCaptureTimeoutRef.current = window.setTimeout(() => {
+      autoCaptureTimeoutRef.current = null;
+      if (autoCaptureInFlightRef.current) {
+        return;
+      }
+
+      autoCaptureInFlightRef.current = true;
+      void handleCapture("auto");
+    }, AUTO_CAPTURE_DELAY_MS);
+
+    return () => {
+      if (autoCaptureTimeoutRef.current) {
+        window.clearTimeout(autoCaptureTimeoutRef.current);
+        autoCaptureTimeoutRef.current = null;
+      }
+    };
+  }, [cameraStatus, draft, lockedQuad, networkState]);
+
   async function startCamera() {
     if (!navigator.mediaDevices?.getUserMedia) {
       setCameraStatus("unsupported");
@@ -590,8 +635,18 @@ export function ScanWorkbench() {
 
     setCameraStatus("starting");
     setSaveError(null);
+    setDraft(null);
     setLiveQuad(null);
     setLockedQuad(null);
+    if (previewUrl) {
+      URL.revokeObjectURL(previewUrl);
+      setPreviewUrl(null);
+    }
+    autoCaptureInFlightRef.current = false;
+    if (autoCaptureTimeoutRef.current) {
+      window.clearTimeout(autoCaptureTimeoutRef.current);
+      autoCaptureTimeoutRef.current = null;
+    }
     streamRef.current?.getTracks().forEach((track) => track.stop());
 
     try {
@@ -645,15 +700,19 @@ export function ScanWorkbench() {
     setNetworkState("idle");
   }
 
-  async function handleCapture() {
+  async function handleCapture(source: "manual" | "auto" = "manual") {
     const video = videoRef.current;
     const canvas = analysisCanvasRef.current;
 
     if (!video || !canvas) {
+      autoCaptureInFlightRef.current = false;
       return;
     }
 
     try {
+      setCameraMessage(
+        source === "auto" ? "名刺を自動撮影しました。解析しています。" : "名刺を撮影しました。解析しています。"
+      );
       const sourceCanvas = document.createElement("canvas");
       sourceCanvas.width = video.videoWidth;
       sourceCanvas.height = video.videoHeight;
@@ -689,6 +748,8 @@ export function ScanWorkbench() {
       setSaveError(
         error instanceof Error ? error.message : "撮影画像の処理に失敗しました"
       );
+    } finally {
+      autoCaptureInFlightRef.current = false;
     }
   }
 
@@ -815,7 +876,7 @@ export function ScanWorkbench() {
           <div>
             <h2 className="section-title">1. 撮影またはアップロード</h2>
             <p className="section-subtitle">
-              カメラで名刺を画面いっぱいに収めると、輪郭を検出して補正します。
+              カメラで名刺を画面いっぱいに収めると、輪郭を検出して自動撮影します。
             </p>
           </div>
           <div className="preview-frame">
@@ -865,11 +926,11 @@ export function ScanWorkbench() {
             </button>
             <button
               className="secondary-button"
-              onClick={handleCapture}
+              onClick={() => void handleCapture("manual")}
               type="button"
               disabled={cameraStatus !== "live" || networkState !== "idle"}
             >
-              撮影して解析
+              手動で撮影
             </button>
             <label className="ghost-button" htmlFor="upload-card">
               画像を選択
