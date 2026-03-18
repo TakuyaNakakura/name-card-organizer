@@ -28,6 +28,8 @@ type CameraStatus =
   | "permission-denied"
   | "error";
 
+type ScanMode = "single" | "batch";
+
 const ANALYSIS_INTERVAL_MS = 220;
 const AUTO_CAPTURE_DELAY_MS = 900;
 const MIN_CONTOUR_AREA_RATIO = 0.035;
@@ -87,6 +89,23 @@ interface QueuedDraft {
   warnings: string[];
   rawOcrText: string;
   saveError: string | null;
+}
+
+function toQueuedDraft(nextDraft: CardDraft): QueuedDraft {
+  return {
+    id: nextDraft.draftToken,
+    draftToken: nextDraft.draftToken,
+    originalImageUrl: nextDraft.originalImageUrl,
+    correctedImageUrl: nextDraft.correctedImageUrl,
+    fullName: nextDraft.fullName ?? "",
+    organization: nextDraft.organization ?? "",
+    jobTitle: nextDraft.jobTitle ?? "",
+    email: nextDraft.email ?? "",
+    confidence: nextDraft.confidence,
+    warnings: nextDraft.warnings,
+    rawOcrText: nextDraft.rawOcrText,
+    saveError: null
+  };
 }
 
 function toBlob(
@@ -659,6 +678,8 @@ export function ScanWorkbench() {
   const [cvReady, setCvReady] = useState(false);
   const [liveQuad, setLiveQuad] = useState<Quadrilateral | null>(null);
   const [lockedQuad, setLockedQuad] = useState<Quadrilateral | null>(null);
+  const [scanMode, setScanMode] = useState<ScanMode>("batch");
+  const [currentDraft, setCurrentDraft] = useState<QueuedDraft | null>(null);
   const [queuedDrafts, setQueuedDrafts] = useState<QueuedDraft[]>([]);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -820,7 +841,8 @@ export function ScanWorkbench() {
       cameraStatus !== "live" ||
       !hasLockedQuad ||
       networkState !== "idle" ||
-      autoCaptureInFlightRef.current
+      autoCaptureInFlightRef.current ||
+      (scanMode === "single" && currentDraft !== null)
     ) {
       if (autoCaptureTimeoutRef.current) {
         window.clearTimeout(autoCaptureTimeoutRef.current);
@@ -846,7 +868,7 @@ export function ScanWorkbench() {
         autoCaptureTimeoutRef.current = null;
       }
     };
-  }, [cameraStatus, hasLockedQuad, networkState]);
+  }, [cameraStatus, currentDraft, hasLockedQuad, networkState, scanMode]);
 
   async function startCamera() {
     if (!navigator.mediaDevices?.getUserMedia) {
@@ -923,23 +945,12 @@ export function ScanWorkbench() {
     }
 
     const nextDraft = (await response.json()) as CardDraft;
-    setQueuedDrafts((current) => [
-      {
-        id: nextDraft.draftToken,
-        draftToken: nextDraft.draftToken,
-        originalImageUrl: nextDraft.originalImageUrl,
-        correctedImageUrl: nextDraft.correctedImageUrl,
-        fullName: nextDraft.fullName ?? "",
-        organization: nextDraft.organization ?? "",
-        jobTitle: nextDraft.jobTitle ?? "",
-        email: nextDraft.email ?? "",
-        confidence: nextDraft.confidence,
-        warnings: nextDraft.warnings,
-        rawOcrText: nextDraft.rawOcrText,
-        saveError: null
-      },
-      ...current
-    ]);
+    const queuedDraft = toQueuedDraft(nextDraft);
+    if (scanMode === "single") {
+      setCurrentDraft(queuedDraft);
+    } else {
+      setQueuedDrafts((current) => [queuedDraft, ...current]);
+    }
     setNetworkState("idle");
     setLiveQuad(null);
     setLockedQuad(null);
@@ -951,9 +962,40 @@ export function ScanWorkbench() {
       setPreviewUrl(null);
     }
     setCameraMessage(
-      cameraStatus === "live"
-        ? "解析結果を追加しました。次の名刺をかざしてください。"
-        : "解析結果を追加しました。続けて画像を選択できます。"
+      scanMode === "single"
+        ? "解析結果を確認して保存してください。"
+        : cameraStatus === "live"
+          ? "解析結果を追加しました。次の名刺をかざしてください。"
+          : "解析結果を追加しました。続けて画像を選択できます。"
+    );
+  }
+
+  function handleScanModeChange(nextMode: ScanMode) {
+    if (nextMode === scanMode) {
+      return;
+    }
+
+    setSaveError(null);
+    if (nextMode === "batch" && currentDraft) {
+      setQueuedDrafts((queue) => [currentDraft, ...queue]);
+      setCurrentDraft(null);
+    }
+
+    setScanMode(nextMode);
+  }
+
+  function updateCurrentDraft(
+    field: keyof Pick<QueuedDraft, "fullName" | "organization" | "jobTitle" | "email">,
+    value: string
+  ) {
+    setCurrentDraft((draft) =>
+      draft
+        ? {
+            ...draft,
+            [field]: value,
+            saveError: null
+          }
+        : draft
     );
   }
 
@@ -973,6 +1015,16 @@ export function ScanWorkbench() {
 
   function removeQueuedDraft(id: string) {
     setQueuedDrafts((current) => current.filter((draft) => draft.id !== id));
+  }
+
+  function discardCurrentDraft() {
+    setCurrentDraft(null);
+    setSaveError(null);
+    setCameraMessage(
+      cameraStatus === "live"
+        ? "保存前の結果を破棄しました。次の名刺をかざしてください。"
+        : "保存前の結果を破棄しました。続けて画像を選択できます。"
+    );
   }
 
   async function saveQueuedDraft(draft: QueuedDraft) {
@@ -1175,6 +1227,50 @@ export function ScanWorkbench() {
     setSaveError("保存できませんでした。入力値を確認してください。");
   }
 
+  async function handleSaveCurrent() {
+    if (!currentDraft) {
+      return;
+    }
+
+    if (!currentDraft.email.trim()) {
+      setCurrentDraft((draft) =>
+        draft
+          ? {
+              ...draft,
+              saveError: "メールアドレスを入力してください。"
+            }
+          : draft
+      );
+      setSaveError("保存できませんでした。入力値を確認してください。");
+      return;
+    }
+
+    setNetworkState("saving");
+    setSaveError(null);
+
+    try {
+      await saveQueuedDraft(currentDraft);
+      setCurrentDraft(null);
+      startTransition(() => {
+        router.push("/cards");
+      });
+    } catch (error) {
+      console.error(error);
+      const message =
+        error instanceof Error ? error.message : "保存できませんでした。入力値を確認してください。";
+      setCurrentDraft((draft) =>
+        draft
+          ? {
+              ...draft,
+              saveError: message
+            }
+          : draft
+      );
+      setSaveError(message);
+      setNetworkState("idle");
+    }
+  }
+
   const activeQuad = lockedQuad ?? liveQuad;
   const overlayQuad = activeQuad
     ? mapQuadToPreviewDisplay(
@@ -1185,6 +1281,8 @@ export function ScanWorkbench() {
         previewSize.height
       )
     : null;
+  const singleReviewLocked = scanMode === "single" && currentDraft !== null;
+  const scanInputDisabled = networkState !== "idle" || singleReviewLocked;
 
   return (
     <div className="grid grid--two">
@@ -1241,11 +1339,14 @@ export function ScanWorkbench() {
               className="secondary-button"
               onClick={() => void handleCapture("manual")}
               type="button"
-              disabled={cameraStatus !== "live" || networkState !== "idle"}
+              disabled={cameraStatus !== "live" || scanInputDisabled}
             >
               手動で撮影
             </button>
-            <label className="ghost-button" htmlFor="upload-card">
+            <label
+              className={scanInputDisabled ? "ghost-button button-disabled" : "ghost-button"}
+              htmlFor="upload-card"
+            >
               画像を選択
             </label>
             <input
@@ -1254,6 +1355,7 @@ export function ScanWorkbench() {
               accept="image/*"
               capture="environment"
               hidden
+              disabled={scanInputDisabled}
               onChange={handleUpload}
             />
           </div>
@@ -1275,13 +1377,150 @@ export function ScanWorkbench() {
           <div>
             <h2 className="section-title">2. スキャン結果を確認</h2>
             <p className="section-subtitle">
-              連続で読み取った名刺をキューにためて、最後にまとめて保存できます。
+              単発で確認しながら保存するか、連続で読み取って最後にまとめて保存するかを切り替えられます。
             </p>
+          </div>
+
+          <div className="segmented-control" role="tablist" aria-label="スキャンモード">
+            <button
+              className={scanMode === "single" ? "segmented-control__button is-active" : "segmented-control__button"}
+              type="button"
+              onClick={() => handleScanModeChange("single")}
+              aria-pressed={scanMode === "single"}
+            >
+              単発スキャン
+            </button>
+            <button
+              className={scanMode === "batch" ? "segmented-control__button is-active" : "segmented-control__button"}
+              type="button"
+              onClick={() => handleScanModeChange("batch")}
+              aria-pressed={scanMode === "batch"}
+            >
+              連続スキャン
+            </button>
           </div>
 
           {saveError ? <div className="status-pill status-pill--warn">{saveError}</div> : null}
 
-          {queuedDrafts.length > 0 ? (
+          {scanMode === "single" ? (
+            <div className="stack">
+              {queuedDrafts.length > 0 ? (
+                <div className="split-banner">
+                  <p className="section-subtitle">
+                    連続スキャンで読み取った未保存の名刺が {queuedDrafts.length} 件あります。まとめて保存する場合は連続スキャンへ戻してください。
+                  </p>
+                  <div className="inline">
+                    <span className="status-pill">未保存 {queuedDrafts.length}件</span>
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      onClick={() => handleScanModeChange("batch")}
+                    >
+                      連続スキャンへ切り替え
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+
+              {currentDraft ? (
+                <div className="draft-queue-card stack">
+                  <div className="inline">
+                    <span className="status-pill">抽出確度 {Math.round(currentDraft.confidence * 100)}%</span>
+                    <button
+                      className="ghost-button"
+                      type="button"
+                      disabled={networkState !== "idle"}
+                      onClick={discardCurrentDraft}
+                    >
+                      破棄して再スキャン
+                    </button>
+                  </div>
+                  <img
+                    alt="補正済みの名刺プレビュー"
+                    className="review-image"
+                    src={currentDraft.correctedImageUrl}
+                  />
+                  {currentDraft.warnings.length > 0 ? (
+                    <ul className="warning-list">
+                      {currentDraft.warnings.map((warning) => (
+                        <li key={`${currentDraft.id}-${warning}`}>{warning}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <div className="status-pill">抽出候補を確認してください</div>
+                  )}
+                  {currentDraft.saveError ? (
+                    <div className="status-pill status-pill--warn">{currentDraft.saveError}</div>
+                  ) : null}
+                  <div className="field">
+                    <label htmlFor="single-fullName">名前</label>
+                    <input
+                      id="single-fullName"
+                      value={currentDraft.fullName}
+                      onChange={(event) => updateCurrentDraft("fullName", event.target.value)}
+                      placeholder="山田 太郎"
+                    />
+                  </div>
+                  <div className="field">
+                    <label htmlFor="single-organization">所属</label>
+                    <input
+                      id="single-organization"
+                      value={currentDraft.organization}
+                      onChange={(event) => updateCurrentDraft("organization", event.target.value)}
+                      placeholder="株式会社サンプル 営業部"
+                    />
+                  </div>
+                  <div className="field">
+                    <label htmlFor="single-jobTitle">役職</label>
+                    <input
+                      id="single-jobTitle"
+                      value={currentDraft.jobTitle}
+                      onChange={(event) => updateCurrentDraft("jobTitle", event.target.value)}
+                      placeholder="部長 / Manager"
+                    />
+                  </div>
+                  <div className="field">
+                    <label htmlFor="single-email">メールアドレス</label>
+                    <input
+                      id="single-email"
+                      value={currentDraft.email}
+                      onChange={(event) => updateCurrentDraft("email", event.target.value)}
+                      placeholder="name@example.com"
+                      type="email"
+                    />
+                  </div>
+                  <div className="field">
+                    <label htmlFor="single-rawOcrText">OCR テキスト</label>
+                    <textarea
+                      id="single-rawOcrText"
+                      readOnly
+                      value={currentDraft.rawOcrText}
+                    />
+                  </div>
+                  <div className="inline">
+                    <button
+                      className="primary-button"
+                      type="button"
+                      disabled={networkState !== "idle"}
+                      onClick={() => void handleSaveCurrent()}
+                    >
+                      {networkState === "saving" ? "保存中..." : "この名刺を保存"}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="split-banner">
+                  <p className="section-subtitle">
+                    単発スキャンでは、1枚ずつ確認して保存します。保存前の結果がある間は次の撮影を止めます。
+                  </p>
+                  <div className="inline muted">
+                    <span>処理状態:</span>
+                    <strong>{networkState === "uploading" ? "OCR 実行中" : "待機中"}</strong>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : queuedDrafts.length > 0 ? (
             <div className="stack">
               <div className="inline">
                 <span className="status-pill">未保存 {queuedDrafts.length}件</span>
