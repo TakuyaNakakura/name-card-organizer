@@ -278,6 +278,10 @@ button {
   display: block;
 }
 
+.preview-media--hidden {
+  display: none !important;
+}
+
 .preview-empty {
   height: 100%;
   display: grid;
