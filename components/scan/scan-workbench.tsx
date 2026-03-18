@@ -24,6 +24,7 @@ type CameraStatus =
   | "starting"
   | "live"
   | "unsupported"
+  | "secure-context-required"
   | "permission-denied"
   | "error";
 
@@ -33,6 +34,33 @@ const MAX_UPLOAD_BYTES = 1_800_000;
 const INITIAL_UPLOAD_QUALITY = 0.84;
 const MIN_UPLOAD_QUALITY = 0.68;
 const MIN_UPLOAD_DIMENSION = 1200;
+const CAMERA_CONSTRAINT_CANDIDATES: MediaStreamConstraints[] = [
+  {
+    video: {
+      facingMode: { ideal: "environment" },
+      width: { ideal: 1920 },
+      height: { ideal: 1080 }
+    },
+    audio: false
+  },
+  {
+    video: {
+      facingMode: { ideal: "environment" }
+    },
+    audio: false
+  },
+  {
+    video: {
+      width: { ideal: 1280 },
+      height: { ideal: 720 }
+    },
+    audio: false
+  },
+  {
+    video: true,
+    audio: false
+  }
+];
 
 declare global {
   interface Window {
@@ -348,6 +376,57 @@ function quadToPolygon(quad: Quadrilateral | null) {
   return quad.points.map((point) => `${point.x},${point.y}`).join(" ");
 }
 
+function canRetryCameraRequest(error: unknown) {
+  return (
+    error instanceof DOMException &&
+    [
+      "AbortError",
+      "DevicesNotFoundError",
+      "NotFoundError",
+      "OverconstrainedError"
+    ].includes(error.name)
+  );
+}
+
+async function requestCameraStream() {
+  let lastError: unknown = null;
+
+  for (const constraints of CAMERA_CONSTRAINT_CANDIDATES) {
+    try {
+      return await navigator.mediaDevices.getUserMedia(constraints);
+    } catch (error) {
+      lastError = error;
+      if (!canRetryCameraRequest(error)) {
+        throw error;
+      }
+    }
+  }
+
+  throw lastError ?? new Error("Failed to acquire camera stream");
+}
+
+function getCameraFailureMessage(error: unknown) {
+  if (!(error instanceof DOMException)) {
+    return "カメラを起動できませんでした。画像アップロードを試してください。";
+  }
+
+  switch (error.name) {
+    case "NotAllowedError":
+    case "SecurityError":
+      return "カメラ権限が拒否されました。ブラウザ設定を確認してください。";
+    case "NotFoundError":
+    case "DevicesNotFoundError":
+      return "利用できるカメラが見つかりません。別端末か画像アップロードを試してください。";
+    case "NotReadableError":
+    case "TrackStartError":
+      return "カメラが他のアプリで使用中です。別タブや別アプリを閉じて再試行してください。";
+    case "OverconstrainedError":
+      return "背面カメラの取得条件が合いませんでした。再度起動すると別条件で試します。";
+    default:
+      return "カメラを起動できませんでした。画像アップロードを試してください。";
+  }
+}
+
 export function ScanWorkbench() {
   const router = useRouter();
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -503,20 +582,20 @@ export function ScanWorkbench() {
       return;
     }
 
+    if (!window.isSecureContext) {
+      setCameraStatus("secure-context-required");
+      setCameraMessage("カメラの利用には HTTPS 接続が必要です。");
+      return;
+    }
+
     setCameraStatus("starting");
     setSaveError(null);
+    setLiveQuad(null);
+    setLockedQuad(null);
+    streamRef.current?.getTracks().forEach((track) => track.stop());
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: "environment" },
-          width: { ideal: 1920 },
-          height: { ideal: 1080 }
-        },
-        audio: false
-      });
-
-      streamRef.current?.getTracks().forEach((track) => track.stop());
+      const stream = await requestCameraStream();
       streamRef.current = stream;
       const video = videoRef.current;
       if (!video) {
@@ -537,11 +616,7 @@ export function ScanWorkbench() {
         error instanceof DOMException &&
         (error.name === "NotAllowedError" || error.name === "SecurityError");
       setCameraStatus(denied ? "permission-denied" : "error");
-      setCameraMessage(
-        denied
-          ? "カメラ権限が拒否されました。ブラウザ設定を確認してください。"
-          : "カメラを起動できませんでした。画像アップロードを試してください。"
-      );
+      setCameraMessage(getCameraFailureMessage(error));
     }
   }
 
@@ -744,9 +819,22 @@ export function ScanWorkbench() {
             </p>
           </div>
           <div className="preview-frame">
-            {cameraStatus === "live" ? (
-              <video ref={videoRef} playsInline muted />
-            ) : previewUrl ? (
+            <video
+              ref={videoRef}
+              autoPlay
+              playsInline
+              muted
+              className={
+                cameraStatus === "live" || cameraStatus === "starting"
+                  ? undefined
+                  : "preview-media--hidden"
+              }
+            />
+            {cameraStatus === "starting" ? (
+              <div className="preview-empty">
+                <p>カメラを起動しています...</p>
+              </div>
+            ) : cameraStatus === "live" ? null : previewUrl ? (
               <img alt="アップロードした名刺のプレビュー" src={previewUrl} />
             ) : (
               <div className="preview-empty">
