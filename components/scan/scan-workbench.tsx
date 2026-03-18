@@ -16,7 +16,7 @@ import {
   type Point,
   type Quadrilateral
 } from "@/lib/card-detection";
-import type { CardDraft, CardRecord } from "@/lib/types";
+import type { CardDraft } from "@/lib/types";
 
 type OpenCvModule = Record<string, any>;
 type CameraStatus =
@@ -73,6 +73,21 @@ declare global {
 }
 
 let cvRuntimePromise: Promise<OpenCvModule> | null = null;
+
+interface QueuedDraft {
+  id: string;
+  draftToken: string;
+  originalImageUrl: string;
+  correctedImageUrl: string;
+  fullName: string;
+  organization: string;
+  jobTitle: string;
+  email: string;
+  confidence: number;
+  warnings: string[];
+  rawOcrText: string;
+  saveError: string | null;
+}
 
 function toBlob(
   canvas: HTMLCanvasElement,
@@ -644,16 +659,12 @@ export function ScanWorkbench() {
   const [cvReady, setCvReady] = useState(false);
   const [liveQuad, setLiveQuad] = useState<Quadrilateral | null>(null);
   const [lockedQuad, setLockedQuad] = useState<Quadrilateral | null>(null);
-  const [draft, setDraft] = useState<CardDraft | null>(null);
+  const [queuedDrafts, setQueuedDrafts] = useState<QueuedDraft[]>([]);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [networkState, setNetworkState] = useState<
     "idle" | "uploading" | "saving"
   >("idle");
-  const [fullName, setFullName] = useState("");
-  const [organization, setOrganization] = useState("");
-  const [jobTitle, setJobTitle] = useState("");
-  const [email, setEmail] = useState("");
   const [previewSize, setPreviewSize] = useState({ width: 640, height: 480 });
 
   useEffect(() => {
@@ -724,21 +735,6 @@ export function ScanWorkbench() {
       streamRef.current?.getTracks().forEach((track) => track.stop());
     };
   }, []);
-
-  useEffect(() => {
-    if (!draft) {
-      setFullName("");
-      setOrganization("");
-      setJobTitle("");
-      setEmail("");
-      return;
-    }
-
-    setFullName(draft.fullName ?? "");
-    setOrganization(draft.organization ?? "");
-    setJobTitle(draft.jobTitle ?? "");
-    setEmail(draft.email ?? "");
-  }, [draft]);
 
   useEffect(() => {
     return () => {
@@ -824,7 +820,6 @@ export function ScanWorkbench() {
       cameraStatus !== "live" ||
       !hasLockedQuad ||
       networkState !== "idle" ||
-      draft ||
       autoCaptureInFlightRef.current
     ) {
       if (autoCaptureTimeoutRef.current) {
@@ -851,7 +846,7 @@ export function ScanWorkbench() {
         autoCaptureTimeoutRef.current = null;
       }
     };
-  }, [cameraStatus, draft, hasLockedQuad, networkState]);
+  }, [cameraStatus, hasLockedQuad, networkState]);
 
   async function startCamera() {
     if (!navigator.mediaDevices?.getUserMedia) {
@@ -868,7 +863,6 @@ export function ScanWorkbench() {
 
     setCameraStatus("starting");
     setSaveError(null);
-    setDraft(null);
     setLiveQuad(null);
     setLockedQuad(null);
     if (previewUrl) {
@@ -929,8 +923,81 @@ export function ScanWorkbench() {
     }
 
     const nextDraft = (await response.json()) as CardDraft;
-    setDraft(nextDraft);
+    setQueuedDrafts((current) => [
+      {
+        id: nextDraft.draftToken,
+        draftToken: nextDraft.draftToken,
+        originalImageUrl: nextDraft.originalImageUrl,
+        correctedImageUrl: nextDraft.correctedImageUrl,
+        fullName: nextDraft.fullName ?? "",
+        organization: nextDraft.organization ?? "",
+        jobTitle: nextDraft.jobTitle ?? "",
+        email: nextDraft.email ?? "",
+        confidence: nextDraft.confidence,
+        warnings: nextDraft.warnings,
+        rawOcrText: nextDraft.rawOcrText,
+        saveError: null
+      },
+      ...current
+    ]);
     setNetworkState("idle");
+    setLiveQuad(null);
+    setLockedQuad(null);
+    lastQuadRef.current = null;
+    stableCountRef.current = 0;
+    autoCaptureInFlightRef.current = false;
+    if (previewUrl) {
+      URL.revokeObjectURL(previewUrl);
+      setPreviewUrl(null);
+    }
+    setCameraMessage(
+      cameraStatus === "live"
+        ? "解析結果を追加しました。次の名刺をかざしてください。"
+        : "解析結果を追加しました。続けて画像を選択できます。"
+    );
+  }
+
+  function updateQueuedDraft(id: string, field: keyof Pick<QueuedDraft, "fullName" | "organization" | "jobTitle" | "email">, value: string) {
+    setQueuedDrafts((current) =>
+      current.map((draft) =>
+        draft.id === id
+          ? {
+              ...draft,
+              [field]: value,
+              saveError: null
+            }
+          : draft
+      )
+    );
+  }
+
+  function removeQueuedDraft(id: string) {
+    setQueuedDrafts((current) => current.filter((draft) => draft.id !== id));
+  }
+
+  async function saveQueuedDraft(draft: QueuedDraft) {
+    const response = await fetch("/api/cards", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        draftToken: draft.draftToken,
+        fullName: draft.fullName.trim() || null,
+        organization: draft.organization.trim() || null,
+        jobTitle: draft.jobTitle.trim() || null,
+        email: draft.email.trim()
+      })
+    });
+
+    if (!response.ok) {
+      const body = (await response.json().catch(() => null)) as
+        | { error?: string; detail?: string | null }
+        | null;
+      throw new Error(
+        [body?.error, body?.detail].filter(Boolean).join(" / ") || "保存に失敗しました"
+      );
+    }
   }
 
   async function handleCapture(source: "manual" | "auto" = "manual") {
@@ -1057,49 +1124,55 @@ export function ScanWorkbench() {
     }
   }
 
-  async function handleSave() {
-    if (!draft) {
+  async function handleSaveAll() {
+    if (queuedDrafts.length === 0) {
       return;
     }
 
     setNetworkState("saving");
     setSaveError(null);
 
-    try {
-      const response = await fetch("/api/cards", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          draftToken: draft.draftToken,
-          fullName: fullName.trim() || null,
-          organization: organization.trim() || null,
-          jobTitle: jobTitle.trim() || null,
-          email: email.trim()
-        })
-      });
+    const nextQueue: QueuedDraft[] = [];
+    let savedCount = 0;
 
-      if (!response.ok) {
-        const body = (await response.json().catch(() => null)) as
-          | { error?: string; detail?: string | null }
-          | null;
-        throw new Error(
-          [body?.error, body?.detail].filter(Boolean).join(" / ") || "保存に失敗しました"
-        );
+    for (const draft of queuedDrafts) {
+      if (!draft.email.trim()) {
+        nextQueue.push({
+          ...draft,
+          saveError: "メールアドレスを入力してください。"
+        });
+        continue;
       }
 
-      const card = (await response.json()) as CardRecord;
-      startTransition(() => {
-        router.push(`/cards?highlight=${card.id}`);
-      });
-    } catch (error) {
-      console.error(error);
-      setNetworkState("idle");
-      setSaveError(
-        error instanceof Error ? error.message : "保存できませんでした。入力値を確認してください。"
-      );
+      try {
+        await saveQueuedDraft(draft);
+        savedCount += 1;
+      } catch (error) {
+        console.error(error);
+        nextQueue.push({
+          ...draft,
+          saveError:
+            error instanceof Error ? error.message : "保存できませんでした。入力値を確認してください。"
+        });
+      }
     }
+
+    setQueuedDrafts(nextQueue);
+    setNetworkState("idle");
+
+    if (nextQueue.length === 0) {
+      startTransition(() => {
+        router.push("/cards");
+      });
+      return;
+    }
+
+    if (savedCount > 0) {
+      setSaveError(`${savedCount}件保存しました。未保存の名刺を確認してください。`);
+      return;
+    }
+
+    setSaveError("保存できませんでした。入力値を確認してください。");
   }
 
   const activeQuad = lockedQuad ?? liveQuad;
@@ -1200,98 +1273,125 @@ export function ScanWorkbench() {
       <section className="panel">
         <div className="panel__body stack">
           <div>
-            <h2 className="section-title">2. 抽出結果を確認</h2>
+            <h2 className="section-title">2. スキャン結果を確認</h2>
             <p className="section-subtitle">
-              OCR で抽出した名前、所属、役職、メールアドレスを確認して保存します。
+              連続で読み取った名刺をキューにためて、最後にまとめて保存できます。
             </p>
           </div>
 
           {saveError ? <div className="status-pill status-pill--warn">{saveError}</div> : null}
 
-          {draft ? (
+          {queuedDrafts.length > 0 ? (
             <div className="stack">
-              <img
-                alt="補正済みの名刺プレビュー"
-                className="review-image"
-                src={draft.correctedImageUrl}
-              />
-              {draft.warnings.length > 0 ? (
-                <ul className="warning-list">
-                  {draft.warnings.map((warning) => (
-                    <li key={warning}>{warning}</li>
-                  ))}
-                </ul>
-              ) : (
-                <div className="status-pill">抽出候補を確認してください</div>
-              )}
-              <div className="field">
-                <label htmlFor="fullName">名前</label>
-                <input
-                  id="fullName"
-                  value={fullName}
-                  onChange={(event) => setFullName(event.target.value)}
-                  placeholder="山田 太郎"
-                />
-              </div>
-              <div className="field">
-                <label htmlFor="organization">所属</label>
-                <input
-                  id="organization"
-                  value={organization}
-                  onChange={(event) => setOrganization(event.target.value)}
-                  placeholder="株式会社サンプル 営業部"
-                />
-              </div>
-              <div className="field">
-                <label htmlFor="jobTitle">役職</label>
-                <input
-                  id="jobTitle"
-                  value={jobTitle}
-                  onChange={(event) => setJobTitle(event.target.value)}
-                  placeholder="部長 / Manager"
-                />
-              </div>
-              <div className="field">
-                <label htmlFor="email">メールアドレス</label>
-                <input
-                  id="email"
-                  value={email}
-                  onChange={(event) => setEmail(event.target.value)}
-                  placeholder="name@example.com"
-                  type="email"
-                />
-              </div>
               <div className="inline">
-                <span className="status-pill">
-                  抽出確度 {Math.round(draft.confidence * 100)}%
-                </span>
+                <span className="status-pill">未保存 {queuedDrafts.length}件</span>
                 <button
                   className="primary-button"
                   type="button"
-                  disabled={networkState !== "idle" || email.trim().length === 0}
-                  onClick={handleSave}
+                  disabled={
+                    networkState !== "idle" ||
+                    queuedDrafts.some((draft) => draft.email.trim().length === 0)
+                  }
+                  onClick={handleSaveAll}
                 >
-                  {networkState === "saving" ? "保存中..." : "保存する"}
+                  {networkState === "saving" ? "まとめて保存中..." : "まとめて保存"}
                 </button>
               </div>
-              <div className="field">
-                <label htmlFor="rawOcrText">OCR テキスト</label>
-                <textarea
-                  id="rawOcrText"
-                  readOnly
-                  value={draft.rawOcrText}
-                />
-              </div>
+
+              {queuedDrafts.map((draft, index) => (
+                <div className="draft-queue-card stack" key={draft.id}>
+                  <div className="inline">
+                    <span className="status-pill">名刺 {queuedDrafts.length - index}</span>
+                    <span className="status-pill">抽出確度 {Math.round(draft.confidence * 100)}%</span>
+                    <button
+                      className="ghost-button"
+                      type="button"
+                      disabled={networkState === "saving"}
+                      onClick={() => removeQueuedDraft(draft.id)}
+                    >
+                      削除
+                    </button>
+                  </div>
+                  <img
+                    alt="補正済みの名刺プレビュー"
+                    className="review-image"
+                    src={draft.correctedImageUrl}
+                  />
+                  {draft.warnings.length > 0 ? (
+                    <ul className="warning-list">
+                      {draft.warnings.map((warning) => (
+                        <li key={`${draft.id}-${warning}`}>{warning}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <div className="status-pill">抽出候補を確認してください</div>
+                  )}
+                  {draft.saveError ? (
+                    <div className="status-pill status-pill--warn">{draft.saveError}</div>
+                  ) : null}
+                  <div className="field">
+                    <label htmlFor={`fullName-${draft.id}`}>名前</label>
+                    <input
+                      id={`fullName-${draft.id}`}
+                      value={draft.fullName}
+                      onChange={(event) => updateQueuedDraft(draft.id, "fullName", event.target.value)}
+                      placeholder="山田 太郎"
+                    />
+                  </div>
+                  <div className="field">
+                    <label htmlFor={`organization-${draft.id}`}>所属</label>
+                    <input
+                      id={`organization-${draft.id}`}
+                      value={draft.organization}
+                      onChange={(event) =>
+                        updateQueuedDraft(draft.id, "organization", event.target.value)
+                      }
+                      placeholder="株式会社サンプル 営業部"
+                    />
+                  </div>
+                  <div className="field">
+                    <label htmlFor={`jobTitle-${draft.id}`}>役職</label>
+                    <input
+                      id={`jobTitle-${draft.id}`}
+                      value={draft.jobTitle}
+                      onChange={(event) => updateQueuedDraft(draft.id, "jobTitle", event.target.value)}
+                      placeholder="部長 / Manager"
+                    />
+                  </div>
+                  <div className="field">
+                    <label htmlFor={`email-${draft.id}`}>メールアドレス</label>
+                    <input
+                      id={`email-${draft.id}`}
+                      value={draft.email}
+                      onChange={(event) => updateQueuedDraft(draft.id, "email", event.target.value)}
+                      placeholder="name@example.com"
+                      type="email"
+                    />
+                  </div>
+                  <div className="field">
+                    <label htmlFor={`rawOcrText-${draft.id}`}>OCR テキスト</label>
+                    <textarea
+                      id={`rawOcrText-${draft.id}`}
+                      readOnly
+                      value={draft.rawOcrText}
+                    />
+                  </div>
+                </div>
+              ))}
             </div>
           ) : (
             <div className="split-banner">
               <p className="section-subtitle">
-                まだ解析結果はありません。撮影またはアップロード後に候補がここに表示されます。
+                まだ未保存の名刺はありません。撮影またはアップロードすると、結果が右側に順番に追加されます。
               </p>
               <div className="inline muted">
                 <span>処理状態:</span>
                 <strong>
-                  {networkState === "uploading" ? "OCR 実行中" : "待機中"}
+                  {networkState === "uploading"
+                    ? "OCR 実行中"
+                    : networkState === "saving"
+                      ? "まとめて保存中"
+                      : "待機中"}
                 </strong>
               </div>
             </div>
