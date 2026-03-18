@@ -319,6 +319,35 @@ button {
   border: 1px solid var(--surface-border);
 }
 
+.segmented-control {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  padding: 8px;
+  border-radius: 999px;
+  border: 1px solid var(--surface-border);
+  background: rgba(255, 255, 255, 0.68);
+}
+
+.segmented-control__button {
+  min-height: 44px;
+  padding: 0 18px;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.segmented-control__button.is-active {
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-strong) 100%);
+  color: white;
+  box-shadow: 0 12px 28px rgba(15, 109, 104, 0.18);
+}
+
+.button-disabled {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
 .cards-list {
   display: grid;
   gap: 16px;
