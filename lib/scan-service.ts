@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import { extractContactInfo } from "@/lib/contact-parser";
 import { getOcrClient } from "@/lib/ocr";
+import { ScanProcessingError, type ScanStage } from "@/lib/scan-errors";
 import { signDraftToken } from "@/lib/session";
 import { buildAssetUrl, getStorage } from "@/lib/storage";
 import type { CardDraft } from "@/lib/types";
@@ -26,9 +27,17 @@ function extensionFromMimeType(mimeType: string) {
   }
 }
 
+async function scanStep<T>(stage: ScanStage, task: () => T | Promise<T>): Promise<T> {
+  try {
+    return await task();
+  } catch (error) {
+    throw new ScanProcessingError(stage, error);
+  }
+}
+
 export async function scanBusinessCard(payload: ScanPayload): Promise<CardDraft> {
-  const storage = getStorage();
-  const ocr = getOcrClient();
+  const storage = await scanStep("storage", getStorage);
+  const ocr = await scanStep("ocr", getOcrClient);
   const scanId = randomUUID();
   const originalKey = `drafts/${scanId}/original.${extensionFromMimeType(
     payload.originalMimeType
@@ -37,21 +46,21 @@ export async function scanBusinessCard(payload: ScanPayload): Promise<CardDraft>
     payload.correctedMimeType
   )}`;
 
-  await storage.putObject({
+  await scanStep("storage", () => storage.putObject({
     key: originalKey,
     body: payload.originalBuffer,
     contentType: payload.originalMimeType
-  });
-  await storage.putObject({
+  }));
+  await scanStep("storage", () => storage.putObject({
     key: correctedKey,
     body: payload.correctedBuffer,
     contentType: payload.correctedMimeType
-  });
+  }));
 
-  const ocrResult = await ocr.recognize({
+  const ocrResult = await scanStep("ocr", () => ocr.recognize({
     buffer: payload.correctedBuffer,
     mimeType: payload.correctedMimeType
-  });
+  }));
   const extraction = extractContactInfo(ocrResult);
   const originalImageUrl = buildAssetUrl(originalKey);
   const correctedImageUrl = buildAssetUrl(correctedKey);

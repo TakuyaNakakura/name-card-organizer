@@ -1,8 +1,11 @@
+import { randomUUID } from "node:crypto";
+
 import { NextResponse } from "next/server";
 
 import { getOptionalIntEnv } from "@/lib/env";
 import { getClientAddress, requireSession } from "@/lib/http";
 import { consumeRateLimit } from "@/lib/rate-limit";
+import { getScanFailure } from "@/lib/scan-errors";
 import { scanBusinessCard } from "@/lib/scan-service";
 
 export const runtime = "nodejs";
@@ -56,7 +59,16 @@ export async function POST(request: Request) {
     );
   }
 
-  const formData = await request.formData();
+  const requestId = randomUUID();
+  let formData: FormData;
+  try {
+    formData = await request.formData();
+  } catch {
+    return NextResponse.json(
+      { error: "画像の送信形式が不正です。もう一度撮影してください。", code: "INVALID_UPLOAD", requestId },
+      { status: 400 }
+    );
+  }
   const originalImage = formData.get("originalImage");
   const correctedImage = formData.get("correctedImage");
 
@@ -78,17 +90,23 @@ export async function POST(request: Request) {
     );
   }
 
-  const [originalBuffer, correctedBuffer] = await Promise.all([
-    Buffer.from(await originalImage.arrayBuffer()),
-    Buffer.from(await correctedImage.arrayBuffer())
-  ]);
+  try {
+    const [originalBuffer, correctedBuffer] = await Promise.all([
+      originalImage.arrayBuffer().then((buffer) => Buffer.from(buffer)),
+      correctedImage.arrayBuffer().then((buffer) => Buffer.from(buffer))
+    ]);
 
-  const draft = await scanBusinessCard({
-    originalBuffer,
-    originalMimeType: originalImage.type || "image/jpeg",
-    correctedBuffer,
-    correctedMimeType: correctedImage.type || "image/jpeg"
-  });
+    const draft = await scanBusinessCard({
+      originalBuffer,
+      originalMimeType: originalImage.type || "image/jpeg",
+      correctedBuffer,
+      correctedMimeType: correctedImage.type || "image/jpeg"
+    });
 
-  return NextResponse.json(draft);
+    return NextResponse.json(draft);
+  } catch (error) {
+    const { status, ...failure } = getScanFailure(error);
+    console.error("Business card scan failed", { requestId, ...failure });
+    return NextResponse.json({ ...failure, requestId }, { status });
+  }
 }

@@ -103,6 +103,12 @@ class GoogleVisionProvider implements OcrProvider {
       }
     });
 
+    if (response.error?.code) {
+      throw Object.assign(new Error(response.error.message || "Google Vision failed to annotate image"), {
+        code: response.error.code
+      });
+    }
+
     const annotation = response.fullTextAnnotation;
     const blocks = flattenBlocks(annotation?.pages);
 

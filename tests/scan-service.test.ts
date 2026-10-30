@@ -24,6 +24,7 @@ vi.mock("@/lib/session", () => ({
 }));
 
 import { scanBusinessCard } from "@/lib/scan-service";
+import { ScanProcessingError } from "@/lib/scan-errors";
 
 describe("scanBusinessCard", () => {
   beforeEach(() => {
@@ -32,6 +33,21 @@ describe("scanBusinessCard", () => {
     mocks.signDraftToken.mockReset();
     mocks.putObject.mockResolvedValue(undefined);
     mocks.signDraftToken.mockResolvedValue("draft-token");
+  });
+
+  it("identifies storage failures before running OCR", async () => {
+    mocks.putObject.mockRejectedValue(new Error("AccessDenied"));
+    const result = scanBusinessCard({ originalBuffer: Buffer.from("original"), originalMimeType: "image/jpeg", correctedBuffer: Buffer.from("corrected"), correctedMimeType: "image/jpeg" });
+    await expect(result).rejects.toMatchObject({ stage: "storage" });
+    expect(mocks.recognize).not.toHaveBeenCalled();
+  });
+
+  it("preserves OCR failures for billing diagnosis", async () => {
+    const cause = Object.assign(new Error("Billing disabled"), { code: 7 });
+    mocks.recognize.mockRejectedValue(cause);
+    const result = scanBusinessCard({ originalBuffer: Buffer.from("original"), originalMimeType: "image/jpeg", correctedBuffer: Buffer.from("corrected"), correctedMimeType: "image/jpeg" });
+    await expect(result).rejects.toBeInstanceOf(ScanProcessingError);
+    await expect(result).rejects.toMatchObject({ stage: "ocr", cause });
   });
 
   it("stores images and returns a draft with extracted contact fields", async () => {

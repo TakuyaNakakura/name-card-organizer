@@ -17,6 +17,7 @@ import {
   type Quadrilateral
 } from "@/lib/card-detection";
 import type { CardDraft } from "@/lib/types";
+import { getScanResponseError } from "@/lib/scan-errors";
 
 type OpenCvModule = Record<string, any>;
 type CameraStatus =
@@ -937,11 +938,8 @@ export function ScanWorkbench() {
       body: formData
     });
 
-    if (!response.ok) {
-      const body = (await response.json().catch(() => null)) as
-        | { error?: string }
-        | null;
-      throw new Error(body?.error || "名刺の解析に失敗しました");
+    if (!response.ok || response.redirected) {
+      throw new Error(await getScanResponseError(response));
     }
 
     const nextDraft = (await response.json()) as CardDraft;
