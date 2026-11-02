@@ -1,17 +1,18 @@
 import { NextResponse } from "next/server";
-
-import { checkDatabaseConnection } from "@/lib/db";
 import { requireSession } from "@/lib/http";
-
-export const runtime = "nodejs";
-
+import { teamSql } from "@/lib/team-db";
+import { apiError, ApiError } from "@/lib/api-error";
 export async function GET() {
   try {
-    await requireSession();
-  } catch {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const s = await requireSession();
+    if (s.role !== "admin")
+      throw new ApiError(403, "FORBIDDEN", "管理者だけが利用できます。");
+    await teamSql()`select 1 from name_card.teams limit 1`;
+    return NextResponse.json(
+      { ok: true },
+      { headers: { "Cache-Control": "no-store" } },
+    );
+  } catch (error) {
+    return apiError(error);
   }
-
-  const result = await checkDatabaseConnection();
-  return NextResponse.json(result, { status: result.ok ? 200 : 503 });
 }

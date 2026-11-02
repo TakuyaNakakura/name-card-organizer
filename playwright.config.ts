@@ -1,33 +1,34 @@
 import { defineConfig, devices } from "@playwright/test";
-
+import { testSecret, testUrl } from "./tests/e2e/support";
 export default defineConfig({
   testDir: "./tests/e2e",
-  timeout: 60_000,
+  globalSetup: "./tests/e2e/global-setup.ts",
+  timeout: 60000,
+  workers: 1,
   use: {
-    baseURL: "http://127.0.0.1:3000",
-    trace: "retain-on-failure"
+    baseURL: "http://127.0.0.1:3100",
+    trace: "retain-on-failure",
+    launchOptions: {
+      args: [
+        "--use-fake-ui-for-media-stream",
+        "--use-fake-device-for-media-stream",
+        "--use-file-for-fake-video-capture=/tmp/name-card-team-camera.y4m",
+      ],
+    },
   },
   webServer: {
-    command: "npm run dev",
-    port: 3000,
-    reuseExistingServer: !process.env.CI,
+    command: "npm run start -- --hostname 127.0.0.1 --port 3100",
+    port: 3100,
+    reuseExistingServer: false,
     env: {
-      ADMIN_PASSWORD: "change-me",
-      DATABASE_URL: "postgres://postgres:postgres@127.0.0.1:55433/name_card_organizer",
-      SESSION_SECRET: "replace-with-a-long-random-secret-at-least-32-characters",
+      DATABASE_URL: testUrl,
+      BETTER_AUTH_URL: "http://127.0.0.1:3100",
+      BETTER_AUTH_SECRET: testSecret,
       OCR_PROVIDER: "mock",
-      MOCK_OCR_TEXT: "Jane Doe\njane@example.com",
       STORAGE_DRIVER: "local",
-      LOCAL_UPLOAD_DIR: "var/uploads",
-      E2E_BYPASS_AUTH: "true"
-    }
+      LOCAL_UPLOAD_DIR: "/tmp/name-card-team-e2e",
+      E2E_BYPASS_AUTH: "false",
+    },
   },
-  projects: [
-    {
-      name: "Mobile Chrome",
-      use: {
-        ...devices["Pixel 7"]
-      }
-    }
-  ]
+  projects: [{ name: "Mobile Chrome", use: { ...devices["Pixel 7"] } }],
 });

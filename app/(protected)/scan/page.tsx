@@ -1,20 +1,18 @@
 import { ScanWorkbench } from "@/components/scan/scan-workbench";
 import { requirePageSession } from "@/lib/http";
-
+import { listDrafts } from "@/lib/team-db";
 export default async function ScanPage() {
-  await requirePageSession("/scan");
-
+  const session = await requirePageSession("/scan");
   return (
-    <main className="grid">
-      <section className="panel hero">
-        <span className="brand__eyebrow">Capture Workflow</span>
-        <h2 className="hero__title">カメラで名刺を取り込み、確認して保存</h2>
-        <p className="hero__lead">
-          モバイルブラウザで背面カメラを起動し、名刺枠を検出してから OCR を実行します。
-          抽出した名前とメールアドレスは保存前に必ず確認できます。
+    <main className="stack">
+      <header className="page-heading">
+        <p className="eyebrow">読み取る → 確認する → チームに登録</p>
+        <h1>名刺をスキャン</h1>
+        <p>
+          自動撮影または画像の選択で取り込みます。共有前に内容を確認できます。
         </p>
-      </section>
-      <ScanWorkbench />
+      </header>
+      <ScanWorkbench initialDrafts={await listDrafts(session)} />
     </main>
   );
 }

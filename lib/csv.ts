@@ -3,7 +3,12 @@ import type { CardRecord } from "@/lib/types";
 const UTF8_BOM = "\uFEFF";
 
 function escapeCsv(value: string | null) {
-  const normalized = value ?? "";
+  const input = value ?? "";
+  // Quoting alone does not stop spreadsheet formula execution.
+  const normalized =
+    /^[\s\u0000-\u001f]*[=+@-]/.test(input) || /^[\t\r\n]/.test(input)
+      ? `'${input}`
+      : input;
   return `"${normalized.replaceAll('"', '""')}"`;
 }
 
@@ -11,7 +16,19 @@ interface CsvOptions {
   excelFriendly?: boolean;
 }
 
-export function cardsToCsv(cards: CardRecord[], options: CsvOptions = {}) {
+export function cardsToCsv(
+  cards: Pick<
+    CardRecord,
+    | "id"
+    | "fullName"
+    | "organization"
+    | "jobTitle"
+    | "email"
+    | "correctedImageUrl"
+    | "createdAt"
+  >[],
+  options: CsvOptions = {},
+) {
   const header = [
     "id",
     "full_name",
@@ -19,7 +36,7 @@ export function cardsToCsv(cards: CardRecord[], options: CsvOptions = {}) {
     "job_title",
     "email",
     "corrected_image_url",
-    "created_at"
+    "created_at",
   ];
   const rows = cards.map((card) =>
     [
@@ -29,8 +46,8 @@ export function cardsToCsv(cards: CardRecord[], options: CsvOptions = {}) {
       escapeCsv(card.jobTitle),
       escapeCsv(card.email),
       escapeCsv(card.correctedImageUrl),
-      escapeCsv(card.createdAt)
-    ].join(",")
+      escapeCsv(card.createdAt),
+    ].join(","),
   );
 
   const newline = options.excelFriendly ? "\r\n" : "\n";

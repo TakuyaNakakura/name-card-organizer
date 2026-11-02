@@ -1,37 +1,57 @@
 import { NextResponse } from "next/server";
-
-import { deleteCardAndAssets } from "@/lib/card-service";
-import { getDatabaseErrorDetail, getDatabaseErrorMessage } from "@/lib/db";
+import {
+  ApiError,
+  apiError,
+  assertSameOrigin,
+  requireUuid,
+  requireVersion,
+} from "@/lib/api-error";
+import { readJson } from "@/lib/api-error";
 import { requireSession } from "@/lib/http";
-
-export const runtime = "nodejs";
-
-export async function DELETE(
-  _request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
+import { editCard, getCard, setCardDeleted } from "@/lib/team-db";
+import { readContactFields } from "@/lib/contact-fields";
+type Context = { params: Promise<{ id: string }> };
+export async function GET(_request: Request, c: Context) {
   try {
-    await requireSession();
-  } catch {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  const { id } = await params;
-  try {
-    const deletedCard = await deleteCardAndAssets(id);
-    if (!deletedCard) {
-      return NextResponse.json({ error: "Card not found" }, { status: 404 });
-    }
-
-    return NextResponse.json({ id: deletedCard.id });
-  } catch (error) {
-    console.error(`Failed to delete card: ${id}`, error);
     return NextResponse.json(
-      {
-        error: getDatabaseErrorMessage(error),
-        detail: getDatabaseErrorDetail(error)
-      },
-      { status: 503 }
+      await getCard(await requireSession(), requireUuid((await c.params).id)),
     );
+  } catch (error) {
+    return apiError(error);
+  }
+}
+export async function PATCH(request: Request, c: Context) {
+  try {
+    const s = await requireSession();
+    assertSameOrigin(request);
+    const body = await readJson(request),
+      fields = readContactFields(body);
+    if (!fields)
+      throw new ApiError(422, "INVALID_FIELDS", "入力内容を確認してください。");
+    return NextResponse.json(
+      await editCard(
+        s,
+        requireUuid((await c.params).id),
+        requireVersion(body.version),
+        fields,
+      ),
+    );
+  } catch (error) {
+    return apiError(error);
+  }
+}
+export async function DELETE(request: Request, c: Context) {
+  try {
+    const s = await requireSession();
+    assertSameOrigin(request);
+    const body = await readJson(request);
+    await setCardDeleted(
+      s,
+      requireUuid((await c.params).id),
+      requireVersion(body.version),
+    );
+    return new Response(null, { status: 204 });
+  } catch (error) {
+    return apiError(error);
   }
 }

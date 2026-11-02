@@ -1,50 +1,48 @@
+import {
+  GoogleLoginButton,
+  PasswordLoginForm,
+} from "@/components/auth/auth-actions";
 import { sanitizeNextPath } from "@/lib/url";
-
-interface LoginPageProps {
-  searchParams: Promise<Record<string, string | string[] | undefined>>;
-}
-
-function readValue(value: string | string[] | undefined) {
-  return Array.isArray(value) ? value[0] : value;
-}
-
-export default async function LoginPage({ searchParams }: LoginPageProps) {
+import { getTeamAuthMode } from "@/lib/auth-config";
+export const dynamic = "force-dynamic";
+export default async function LoginPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ next?: string; reason?: string }>;
+}) {
   const params = await searchParams;
-  const next = sanitizeNextPath(readValue(params.next), "/scan");
-  const error = readValue(params.error);
-
+  const passwordMode = getTeamAuthMode() === "password";
   return (
-    <div className="login-shell">
-      <section className="panel login-card">
-        <div className="panel__body stack">
-          <div className="split-banner">
-            <span className="brand__eyebrow">Private Access</span>
-            <h1 className="brand__title">管理画面にログイン</h1>
-            <p className="section-subtitle">
-              このアプリは単一管理者向けです。設定したパスワードでログインしてください。
-            </p>
-          </div>
-          {error ? (
-            <div className="status-pill status-pill--warn">{error}</div>
-          ) : null}
-          <form className="stack" action="/api/auth/login" method="post">
-            <input type="hidden" name="next" value={next} />
-            <div className="field">
-              <label htmlFor="password">パスワード</label>
-              <input
-                id="password"
-                name="password"
-                type="password"
-                autoComplete="current-password"
-                required
-              />
-            </div>
-            <button className="primary-button" type="submit">
-              ログイン
-            </button>
-          </form>
-        </div>
+    <main className="login-page">
+      <section className="panel login-panel">
+        <p className="eyebrow">チームで使う名刺管理</p>
+        <h1>名刺インボックス</h1>
+        <p>
+          名刺を読み取り、内容を確認してチームに共有できます。未登録の下書きは自分だけに表示されます。
+        </p>
+        {params.reason && (
+          <p className="notice" role="status">
+            {params.reason === "PASSWORD_CHANGED"
+              ? "パスワードを変更しました。新しいパスワードでログインしてください。"
+              : passwordMode
+                ? "管理者から案内されたユーザーIDとパスワードでログインしてください。利用できない場合は管理者に連絡してください。"
+                : "招待済みのGoogleアカウントでログインしてください。招待の有効期限は7日間です。参加できない場合は管理者に連絡してください。"}
+          </p>
+        )}
+        {passwordMode ? (
+          <PasswordLoginForm
+            nextPath={sanitizeNextPath(params.next || "/cards")}
+          />
+        ) : (
+          <GoogleLoginButton
+            nextPath={sanitizeNextPath(params.next || "/cards")}
+          />
+        )}
+        <p className="hint">
+          名刺画像は保存先ストレージへ送信され、文字の読み取りにはGoogle Cloud
+          Visionを使用します。共有する前に本人の情報と内容を確認してください。
+        </p>
       </section>
-    </div>
+    </main>
   );
 }
