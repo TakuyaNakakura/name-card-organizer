@@ -2,6 +2,15 @@
   "name": "name-card-organizer",
   "version": "0.1.0",
   "private": true,
+  "overrides": {
+    "sharp": "$sharp",
+    "next": {
+      "postcss": "8.5.32"
+    }
+  },
+  "engines": {
+    "node": "24.x"
+  },
   "scripts": {
     "sync:opencv": "node scripts/sync-opencv-runtime.mjs",
     "predev": "npm run sync:opencv",
@@ -10,25 +19,36 @@
     "build": "next build",
     "prestart": "npm run sync:opencv",
     "start": "next start",
-    "admin:hash": "node scripts/hash-admin-password.mjs",
+    "db:migrate": "node scripts/migrate.mjs",
+    "team:bootstrap": "node scripts/bootstrap-team.mjs",
+    "db:import-legacy": "node scripts/import-legacy-cards.mjs",
+    "db:export-legacy": "node scripts/export-legacy-cards.mjs",
+    "typecheck": "next typegen && tsc --noEmit",
     "google-creds:minify": "node scripts/minify-google-credentials-json.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:integration": "vitest run --config vitest.integration.config.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.864.0",
+    "@fontsource-variable/noto-sans-jp": "5.3.1",
     "@google-cloud/vision": "^5.3.4",
     "@techstark/opencv-js": "^4.11.0-release.1",
+    "better-auth": "1.7.15",
     "jose": "^6.0.12",
-    "next": "^15.3.3",
+    "kysely": "0.29.8",
+    "next": "15.5.28",
+    "pg": "8.23.1",
     "postgres": "^3.4.7",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "sharp": "0.35.5"
   },
   "devDependencies": {
     "@playwright/test": "^1.55.0",
     "@types/node": "^24.3.0",
+    "@types/pg": "8.15.6",
     "@types/react": "^19.0.12",
     "@types/react-dom": "^19.0.5",
     "jsdom": "^26.1.0",

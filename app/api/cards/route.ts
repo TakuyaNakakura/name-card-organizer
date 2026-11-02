@@ -1,96 +1,46 @@
-import { randomUUID } from "node:crypto";
-
 import { NextResponse } from "next/server";
-
 import {
-  getDatabaseErrorDetail,
-  getDatabaseErrorMessage,
-  insertCard,
-  listCards
-} from "@/lib/db";
+  apiError,
+  assertSameOrigin,
+  requireUuid,
+  requireVersion,
+} from "@/lib/api-error";
+import { readJson } from "@/lib/api-error";
 import { requireSession } from "@/lib/http";
-import { verifyDraftToken } from "@/lib/session";
-
+import { confirmDraft, listTeamCards } from "@/lib/team-db";
+import { cardFilters } from "@/lib/card-filters";
 export const runtime = "nodejs";
-
-interface CreateCardBody {
-  draftToken?: string;
-  fullName?: string | null;
-  organization?: string | null;
-  jobTitle?: string | null;
-  email?: string;
-}
-
 export async function GET(request: Request) {
   try {
-    await requireSession();
-  } catch {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  const url = new URL(request.url);
-  const search = url.searchParams.get("q") ?? undefined;
-  try {
-    const cards = await listCards(search);
-    return NextResponse.json(cards);
-  } catch (error) {
-    console.error("Failed to list cards", error);
-    return NextResponse.json(
-      {
-        error: getDatabaseErrorMessage(error),
-        detail: getDatabaseErrorDetail(error)
-      },
-      { status: 503 }
+    const result = await listTeamCards(
+      await requireSession(),
+      cardFilters(new URL(request.url).searchParams),
     );
+    return NextResponse.json({
+      ...result,
+      nextCursor:
+        result.page * result.limit < result.total
+          ? String(result.page + 1)
+          : null,
+    });
+  } catch (error) {
+    return apiError(error);
   }
 }
-
 export async function POST(request: Request) {
   try {
-    await requireSession();
-  } catch {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  const body = (await request.json()) as CreateCardBody;
-  if (!body.draftToken || !body.email?.trim()) {
+    const s = await requireSession();
+    assertSameOrigin(request);
+    const body = await readJson(request);
     return NextResponse.json(
-      { error: "draftToken and email are required" },
-      { status: 400 }
+      await confirmDraft(
+        s,
+        requireUuid(body.draftId),
+        requireVersion(body.version),
+      ),
+      { status: 201 },
     );
-  }
-
-  try {
-    const draft = await verifyDraftToken(body.draftToken);
-    const record = await insertCard({
-      id: randomUUID(),
-      fullName: body.fullName?.trim() || null,
-      organization: body.organization?.trim() || null,
-      jobTitle: body.jobTitle?.trim() || null,
-      email: body.email.trim(),
-      originalImageUrl: draft.originalImageUrl,
-      correctedImageUrl: draft.correctedImageUrl,
-      rawOcrText: draft.rawOcrText,
-      extractionConfidence: draft.confidence
-    });
-
-    return NextResponse.json(record, { status: 201 });
   } catch (error) {
-    console.error("Failed to save card", error);
-
-    if (error instanceof Error && /JWT|token|expir/i.test(error.message)) {
-      return NextResponse.json(
-        { error: "下書きの有効期限が切れました。もう一度スキャンしてください。" },
-        { status: 400 }
-      );
-    }
-
-    return NextResponse.json(
-      {
-        error: getDatabaseErrorMessage(error),
-        detail: getDatabaseErrorDetail(error)
-      },
-      { status: 503 }
-    );
+    return apiError(error);
   }
 }

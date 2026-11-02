@@ -13,42 +13,42 @@ const contentSecurityPolicy = [
   "connect-src 'self'",
   "media-src 'self' blob: data:",
   "worker-src 'self' blob:",
-  "frame-src 'none'"
+  "frame-src 'none'",
 ].join("; ");
 
 const securityHeaders = [
   {
     key: "Content-Security-Policy",
-    value: contentSecurityPolicy
+    value: contentSecurityPolicy,
   },
   {
     key: "Referrer-Policy",
-    value: "strict-origin-when-cross-origin"
+    value: "strict-origin-when-cross-origin",
   },
   {
     key: "X-Content-Type-Options",
-    value: "nosniff"
+    value: "nosniff",
   },
   {
     key: "X-Frame-Options",
-    value: "DENY"
+    value: "DENY",
   },
   {
     key: "Cross-Origin-Opener-Policy",
-    value: "same-origin"
+    value: "same-origin",
   },
   {
     key: "Cross-Origin-Resource-Policy",
-    value: "same-origin"
+    value: "same-origin",
   },
   {
     key: "Permissions-Policy",
-    value: "camera=(self), microphone=(), geolocation=()"
+    value: "camera=(self), microphone=(), geolocation=()",
   },
   {
     key: "Strict-Transport-Security",
-    value: "max-age=63072000; includeSubDomains; preload"
-  }
+    value: "max-age=63072000; includeSubDomains; preload",
+  },
 ];
 
 const nextConfig: NextConfig = {
@@ -56,11 +56,15 @@ const nextConfig: NextConfig = {
   async headers() {
     return [
       {
+        source: "/api/:path*",
+        headers: [{ key: "Cache-Control", value: "private, no-store" }],
+      },
+      {
         source: "/:path*",
-        headers: securityHeaders
-      }
+        headers: securityHeaders,
+      },
     ];
-  }
+  },
 };
 
 export default nextConfig;
