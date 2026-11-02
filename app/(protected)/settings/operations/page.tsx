@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { requirePageSession } from "@/lib/http";
 import { teamSql } from "@/lib/team-db";
+import { OCR_LIMITS } from "@/lib/ocr-limits";
 export default async function OperationsPage() {
   const s = await requirePageSession("/settings/operations");
   if (s.role !== "admin") notFound();
@@ -20,7 +21,7 @@ export default async function OperationsPage() {
       <section className="panel stack">
         <h2>読み取り・データ保持</h2>
         <p>
-          今の時間帯のOCR実行予約：{usage.total} / 150回（各メンバー30回まで）
+          {`今の時間帯のOCR実行予約：${usage.total} / ${OCR_LIMITS.perTeamPerHour}回（各メンバー${OCR_LIMITS.perMemberPerHour}回まで）`}
         </p>
         <p>
           下書き7日、ごみ箱30日、操作履歴1年。再解析は1回のOCRとして数えます。
