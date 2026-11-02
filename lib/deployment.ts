@@ -1,8 +1,4 @@
-import {
-  getOptionalEnv,
-  getOcrProvider,
-  getStorageDriver
-} from "@/lib/env";
+import { getOptionalEnv, getOcrProvider, getStorageDriver } from "@/lib/env";
 import { isPlaceholderDatabaseUrl } from "@/lib/db";
 
 function hasValue(name: string) {
@@ -25,7 +21,7 @@ export function getPublicDeploymentIssues() {
   }
 
   const issues: string[] = [];
-  const sessionSecret = getOptionalEnv("SESSION_SECRET");
+  const sessionSecret = getOptionalEnv("BETTER_AUTH_SECRET");
   const databaseUrl = getOptionalEnv("DATABASE_URL");
 
   if (process.env.E2E_BYPASS_AUTH === "true") {
@@ -50,12 +46,29 @@ export function getPublicDeploymentIssues() {
     issues.push("OCR_PROVIDER=mock is not allowed for public deployment");
   }
 
-  if (!hasValue("ADMIN_PASSWORD_HASH")) {
-    issues.push("ADMIN_PASSWORD_HASH is required for public deployment");
+  for (const name of [
+    "GOOGLE_CLIENT_ID",
+    "GOOGLE_CLIENT_SECRET",
+    "BETTER_AUTH_URL",
+    "CRON_SECRET",
+  ]) {
+    if (!hasValue(name))
+      issues.push(`${name} is required for public deployment`);
   }
+  if (hasValue("DATABASE_MIGRATION_URL"))
+    issues.push(
+      "Do not expose DATABASE_MIGRATION_URL to the running application",
+    );
+  if (
+    hasValue("BETTER_AUTH_URL") &&
+    !getOptionalEnv("BETTER_AUTH_URL").startsWith("https://")
+  )
+    issues.push("BETTER_AUTH_URL must use HTTPS");
 
   if (sessionSecret.length < 32) {
-    issues.push("SESSION_SECRET must be at least 32 characters for public deployment");
+    issues.push(
+      "BETTER_AUTH_SECRET must be at least 32 characters for public deployment",
+    );
   }
 
   if (getOcrProvider() === "google") {
@@ -64,13 +77,17 @@ export function getPublicDeploymentIssues() {
       !hasValue("GOOGLE_APPLICATION_CREDENTIALS")
     ) {
       issues.push(
-        "Google OCR requires GOOGLE_CLOUD_CREDENTIALS_JSON or GOOGLE_APPLICATION_CREDENTIALS"
+        "Google OCR requires GOOGLE_CLOUD_CREDENTIALS_JSON or GOOGLE_APPLICATION_CREDENTIALS",
       );
     }
   }
 
   if (getStorageDriver() === "s3") {
-    for (const name of ["S3_BUCKET", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY"]) {
+    for (const name of [
+      "S3_BUCKET",
+      "S3_ACCESS_KEY_ID",
+      "S3_SECRET_ACCESS_KEY",
+    ]) {
       if (!hasValue(name)) {
         issues.push(`${name} is required when STORAGE_DRIVER=s3`);
       }
@@ -83,6 +100,8 @@ export function getPublicDeploymentIssues() {
 export function assertPublicDeploymentSafety() {
   const issues = getPublicDeploymentIssues();
   if (issues.length > 0) {
-    throw new Error(`Unsafe public deployment configuration: ${issues.join("; ")}`);
+    throw new Error(
+      `Unsafe public deployment configuration: ${issues.join("; ")}`,
+    );
   }
 }

@@ -1,30 +1,49 @@
 import Link from "next/link";
-
-export default function ProtectedLayout({
-  children
-}: Readonly<{
+import { requirePageSession } from "@/lib/http";
+import { LogoutButton } from "@/components/auth/auth-actions";
+import { Navigation } from "@/components/navigation";
+export const dynamic = "force-dynamic";
+export default async function ProtectedLayout({
+  children,
+}: {
   children: React.ReactNode;
-}>) {
+}) {
+  const session = await requirePageSession("/cards");
   return (
     <div className="shell">
-      <div className="shell__frame">
-        <header className="topbar">
-          <div className="brand">
-            <span className="brand__eyebrow">Name Card Organizer</span>
-            <h1 className="brand__title">名刺インボックス</h1>
+      <a href="#main-content" className="skip-link">
+        本文へ移動
+      </a>
+      <header className="site-header">
+        <div className="shell__frame">
+          <div className="row row--between">
+            <Link href="/cards" className="brand">
+              <span className="brand__eyebrow">{session.teamName}</span>
+              <span className="brand__title">名刺インボックス</span>
+            </Link>
+            <div className="account">
+              <span>
+                {session.name}{" "}
+                <span className="badge">
+                  {session.role === "admin" ? "管理者" : "メンバー"}
+                </span>
+              </span>
+              <LogoutButton />
+            </div>
           </div>
-          <nav className="nav">
-            <Link href="/scan">スキャン</Link>
-            <Link href="/cards">一覧</Link>
-            <form action="/api/auth/logout" method="post">
-              <button className="ghost-button" type="submit">
-                ログアウト
-              </button>
-            </form>
-          </nav>
-        </header>
+          <Navigation admin={session.role === "admin"} />
+        </div>
+      </header>
+      <div
+        className="shell__frame main-content"
+        id="main-content"
+        tabIndex={-1}
+      >
         {children}
       </div>
+      <footer className="site-footer shell__frame">
+        登録した名刺はチーム内で共有されます。未登録の下書きは自分だけが閲覧できます。
+      </footer>
     </div>
   );
 }

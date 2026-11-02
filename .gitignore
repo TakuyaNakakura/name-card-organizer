@@ -16,3 +16,5 @@ secrets/
 .env.compose.example
 .env.example
 .env.vercel.example
+.env.*.local
+*.tsbuildinfo

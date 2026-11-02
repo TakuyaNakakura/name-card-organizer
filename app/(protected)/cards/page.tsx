@@ -1,126 +1,174 @@
 import Link from "next/link";
-
-import { DeleteCardButton } from "@/components/cards/delete-card-button";
-import { getDatabaseErrorMessage, listCards } from "@/lib/db";
 import { requirePageSession } from "@/lib/http";
-import type { CardRecord } from "@/lib/types";
-
-interface CardsPageProps {
-  searchParams: Promise<Record<string, string | string[] | undefined>>;
-}
-
-function readSearchParam(value: string | string[] | undefined) {
-  return Array.isArray(value) ? value[0] : value;
-}
-
-export default async function CardsPage({ searchParams }: CardsPageProps) {
-  await requirePageSession("/cards");
-
-  const params = await searchParams;
-  const search = readSearchParam(params.q)?.trim() ?? "";
-  const highlight = readSearchParam(params.highlight) ?? "";
-  let cards: CardRecord[] = [];
-  let loadError: string | null = null;
-
-  try {
-    cards = await listCards(search || undefined);
-  } catch (error) {
-    console.error("Failed to render cards page", error);
-    loadError = getDatabaseErrorMessage(error);
-  }
-
+import { listTeamCards, members } from "@/lib/team-db";
+import { cardFilters } from "@/lib/card-filters";
+export default async function CardsPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | undefined>>;
+}) {
+  const s = await requirePageSession("/cards"),
+    params = await searchParams,
+    query = new URLSearchParams(
+      Object.entries(params).filter(
+        (entry): entry is [string, string] => typeof entry[1] === "string",
+      ),
+    );
+  const filters = cardFilters(query),
+    result = await listTeamCards(s, filters),
+    people = await members(s);
   return (
-    <main className="grid">
-      <section className="panel hero">
-        <span className="brand__eyebrow">Saved Cards</span>
-            <h2 className="hero__title">保存済みの名刺一覧</h2>
-            <p className="hero__lead">
-              名前、所属、役職、メールアドレスで検索できます。CSV エクスポートは現在の検索条件に追従します。
-            </p>
-      </section>
-
-      <section className="panel">
-        <div className="panel__body stack">
-          {loadError ? <div className="status-pill status-pill--warn">{loadError}</div> : null}
-          <form className="grid cards-toolbar" action="/cards" method="get">
-            <div className="field">
-              <label htmlFor="q">検索</label>
-              <input
-                id="q"
-                name="q"
-                defaultValue={search}
-                placeholder="名前、所属、役職、メールアドレス"
-              />
-            </div>
-            <div className="inline">
-              <button className="primary-button" type="submit">
-                検索
-              </button>
-              <Link className="secondary-button" href="/scan">
-                新規スキャン
-              </Link>
-              <a
-                className="ghost-button"
-                href={`/api/cards/export${search ? `?q=${encodeURIComponent(search)}` : ""}`}
-              >
-                CSV エクスポート
-              </a>
-            </div>
-          </form>
-
-          <div className="cards-list">
-            {cards.length > 0 ? (
-              cards.map((card) => (
-                <article
-                  className={`card-row ${highlight === card.id ? "card-row--highlight" : ""}`}
-                  key={card.id}
-                >
-                  {card.correctedImageUrl ? (
-                    <img
-                      alt={`${card.email || "保存済み名刺"} の名刺`}
-                      src={card.correctedImageUrl}
-                    />
-                  ) : (
-                    <div className="preview-empty">
-                      <p>画像なし</p>
-                    </div>
-                  )}
-                  <div className="card-row__meta">
-                    <h3 className="card-row__title">{card.fullName || "名前未入力"}</h3>
-                    <p className="card-row__line">{card.organization || "所属未入力"}</p>
-                    <p className="card-row__line">{card.jobTitle || "役職未入力"}</p>
-                    <p className="card-row__line">{card.email || "メール未入力"}</p>
-                    <p className="card-row__line">
-                      保存日時 {new Date(card.createdAt).toLocaleString("ja-JP")}
-                    </p>
-                    <p className="card-row__line">
-                      抽出確度 {Math.round(card.extractionConfidence * 100)}%
-                    </p>
-                    <details>
-                      <summary>OCR テキスト</summary>
-                      <pre className="ocr-text">{card.rawOcrText}</pre>
-                    </details>
-                    <DeleteCardButton cardId={card.id} />
-                  </div>
-                </article>
-              ))
-            ) : (
-              <div className="split-banner">
-                <p className="section-subtitle">
-                  {loadError
-                    ? "一覧を読み込めませんでした。DATABASE_URL と DB 接続設定を確認してください。"
-                    : "保存済みの名刺はまだありません。まずはスキャン画面から 1 枚取り込んでください。"}
-                </p>
-                {loadError ? (
-                  <a className="ghost-button" href="/api/health/database" rel="noreferrer">
-                    DB 接続診断 JSON
-                  </a>
-                ) : null}
-              </div>
-            )}
+    <main className="stack">
+      <header className="page-heading">
+        <p className="eyebrow">チームの共有連絡先</p>
+        <div className="row row--between">
+          <h1>共有名刺</h1>
+          <Link href="/scan" className="primary-button">
+            名刺をスキャン
+          </Link>
+        </div>
+        <p>確認して登録した名刺を、チーム全員で閲覧できます。</p>
+      </header>
+      <form className="panel stack" action="/cards">
+        <div className="field">
+          <label htmlFor="card-search">名刺を検索</label>
+          <input
+            id="card-search"
+            name="q"
+            defaultValue={filters.q}
+            placeholder="名前、所属、役職、メールアドレス"
+          />
+        </div>
+        <div className="filter-grid">
+          <div className="field">
+            <label htmlFor="creator">登録者</label>
+            <select
+              id="creator"
+              name="createdBy"
+              defaultValue={filters.createdBy || ""}
+            >
+              <option value="">全員</option>
+              {people.map((p) => (
+                <option key={p.user_id} value={p.user_id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="field">
+            <label htmlFor="date-from">登録日（開始）</label>
+            <input
+              id="date-from"
+              name="from"
+              type="date"
+              defaultValue={filters.from}
+            />
+          </div>
+          <div className="field">
+            <label htmlFor="date-to">登録日（終了）</label>
+            <input
+              id="date-to"
+              name="to"
+              type="date"
+              defaultValue={filters.to}
+            />
           </div>
         </div>
-      </section>
+        <div className="actions">
+          <button className="primary-button">検索</button>
+          <Link href="/cards" className="secondary-button">
+            条件をクリア
+          </Link>
+          <a className="secondary-button" href={`/api/cards/export?${query}`}>
+            検索結果をCSV出力
+          </a>
+        </div>
+      </form>
+      {params.trashed === "1" && (
+        <p className="success-banner" role="status">
+          名刺をごみ箱に移動しました。
+          <Link href="/settings/trash">
+            30日以内ならごみ箱から復元できます。
+          </Link>
+        </p>
+      )}
+      <p role="status">
+        {result.total}件の名刺 / {result.page}ページ
+      </p>
+      {!result.items.length ? (
+        <section className="empty-state">
+          <h2>
+            {filters.q
+              ? "条件に一致する名刺がありません"
+              : "共有名刺はまだありません"}
+          </h2>
+          <p>検索条件を変えるか、名刺をスキャンして登録してください。</p>
+        </section>
+      ) : (
+        <div className="card-list">
+          {result.items.map((card) => (
+            <article className="contact-card" key={card.id}>
+              <Link href={`/cards/${card.id}`} className="contact-card__image">
+                {card.correctedImageUrl ? (
+                  <img
+                    src={card.correctedImageUrl}
+                    alt={`${card.fullName || card.organization || "名刺"}の画像`}
+                    loading="lazy"
+                  />
+                ) : (
+                  <span>画像なし</span>
+                )}
+              </Link>
+              <div className="stack">
+                <h2>
+                  <Link href={`/cards/${card.id}`}>
+                    {card.fullName || card.organization || "名前未入力"}
+                  </Link>
+                </h2>
+                <p>
+                  {[card.organization, card.jobTitle]
+                    .filter(Boolean)
+                    .join(" / ") || "所属・役職未入力"}
+                </p>
+                {card.email ? (
+                  <a href={`mailto:${card.email}`}>{card.email}</a>
+                ) : (
+                  <p className="hint">メールアドレス未入力</p>
+                )}
+                <p className="hint">
+                  登録者：{card.createdByName}
+                  <br />
+                  登録日：{new Date(card.createdAt).toLocaleDateString("ja-JP")}
+                </p>
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
+      <nav className="actions" aria-label="ページ移動">
+        {result.page > 1 && (
+          <Link
+            href={{
+              pathname: "/cards",
+              query: { ...Object.fromEntries(query), page: result.page - 1 },
+            }}
+            className="secondary-button"
+          >
+            前のページ
+          </Link>
+        )}
+        {result.page * result.limit < result.total && (
+          <Link
+            href={{
+              pathname: "/cards",
+              query: { ...Object.fromEntries(query), page: result.page + 1 },
+            }}
+            className="secondary-button"
+          >
+            次のページ
+          </Link>
+        )}
+      </nav>
     </main>
   );
 }

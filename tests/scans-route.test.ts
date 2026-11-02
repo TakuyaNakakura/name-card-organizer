@@ -1,65 +1,95 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
+import { randomUUID } from "node:crypto";
+import sharp from "sharp";
+import { ApiError } from "@/lib/api-error";
 const mocks = vi.hoisted(() => ({
   requireSession: vi.fn(),
-  scanBusinessCard: vi.fn()
+  createTeamScan: vi.fn(),
 }));
-
-vi.mock("@/lib/http", () => ({
-  requireSession: mocks.requireSession,
-  getClientAddress: () => "test-client"
+vi.mock("@/lib/http", () => ({ requireSession: mocks.requireSession }));
+vi.mock("@/lib/team-scan-service", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/team-scan-service")>()),
+  createTeamScan: mocks.createTeamScan,
 }));
-vi.mock("@/lib/rate-limit", () => ({ consumeRateLimit: () => ({ limited: false }) }));
-vi.mock("@/lib/scan-service", () => ({ scanBusinessCard: mocks.scanBusinessCard }));
-
 import { POST } from "@/app/api/scans/route";
-import { ScanProcessingError } from "@/lib/scan-errors";
-
-function scanRequest() {
+async function request(type = "image/png", invalid = false) {
   const form = new FormData();
-  form.append("originalImage", new File(["image"], "original.jpg", { type: "image/jpeg" }));
-  form.append("correctedImage", new File(["image"], "corrected.jpg", { type: "image/jpeg" }));
-  return new Request("http://localhost/api/scans", { method: "POST", body: form });
+  form.set("clientScanId", randomUUID());
+  const image = invalid
+    ? Buffer.from("not an image")
+    : await sharp({
+        create: { width: 400, height: 250, channels: 3, background: "#fff" },
+      })
+        .png()
+        .toBuffer();
+  for (const field of ["originalImage", "correctedImage"])
+    form.set(
+      field,
+      new File([new Uint8Array(image)], `${field}.png`, { type }),
+    );
+  return new Request("http://localhost/api/scans", {
+    method: "POST",
+    headers: { origin: "http://localhost" },
+    body: form,
+  });
 }
-
-describe("POST /api/scans", () => {
+describe("POST /api/scans team contract", () => {
   beforeEach(() => {
-    mocks.requireSession.mockReset().mockResolvedValue(undefined);
-    mocks.scanBusinessCard.mockReset();
-    vi.restoreAllMocks();
-    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.clearAllMocks();
+    vi.stubEnv("BETTER_AUTH_URL", "http://localhost");
+    mocks.requireSession.mockResolvedValue({
+      userId: "user",
+      teamId: randomUUID(),
+      role: "member",
+    });
   });
-
-  it("returns a safe JSON billing failure with a request ID", async () => {
-    mocks.scanBusinessCard.mockRejectedValue(new ScanProcessingError("ocr", Object.assign(new Error("Billing disabled: private-project"), { code: 7 })));
-    const response = await POST(scanRequest());
-    const body = await response.json();
-
-    expect(response.status).toBe(502);
-    expect(body).toMatchObject({ code: "OCR_BILLING_DISABLED", stage: "ocr", requestId: expect.any(String) });
-    expect(JSON.stringify(body)).not.toContain("private-project");
-    expect(console.error).toHaveBeenCalledWith("Business card scan failed", expect.objectContaining({ requestId: body.requestId, code: body.code }));
-  });
-
-  it("returns the existing successful draft unchanged", async () => {
-    const draft = { draftToken: "draft-token", email: "test@example.com" };
-    mocks.scanBusinessCard.mockResolvedValue(draft);
-    const response = await POST(scanRequest());
+  it("decodes images and returns a durable draft rather than an OCR JWT", async () => {
+    const draft = { id: randomUUID(), status: "ready", version: 2 };
+    mocks.createTeamScan.mockResolvedValue(draft);
+    const response = await POST(await request());
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual(draft);
+    expect(mocks.createTeamScan).toHaveBeenCalledOnce();
   });
-
-  it("rejects expired sessions before invoking external services", async () => {
-    mocks.requireSession.mockRejectedValue(new Error("Unauthorized"));
-    expect((await POST(scanRequest())).status).toBe(401);
-    expect(mocks.scanBusinessCard).not.toHaveBeenCalled();
+  it("returns structured safe provider errors", async () => {
+    mocks.createTeamScan.mockRejectedValue(
+      new ApiError(
+        502,
+        "OCR_BILLING_DISABLED",
+        "OCRの課金設定を確認してください。",
+      ),
+    );
+    const response = await POST(await request());
+    expect(response.status).toBe(502);
+    expect(await response.json()).toMatchObject({
+      error: { code: "OCR_BILLING_DISABLED", requestId: expect.any(String) },
+    });
   });
-
-  it("returns JSON for malformed uploads", async () => {
-    const response = await POST(new Request("http://localhost/api/scans", { method: "POST", body: "broken" }));
-    expect(response.status).toBe(400);
-    expect(await response.json()).toMatchObject({ code: "INVALID_UPLOAD" });
-    expect(mocks.scanBusinessCard).not.toHaveBeenCalled();
+  it("rejects expired sessions before touching OCR", async () => {
+    mocks.requireSession.mockRejectedValue(
+      new ApiError(401, "UNAUTHENTICATED", "ログインしてください。"),
+    );
+    expect((await POST(await request())).status).toBe(401);
+    expect(mocks.createTeamScan).not.toHaveBeenCalled();
+  });
+  it("rejects cross-origin writes", async () => {
+    const req = await request();
+    req.headers.set("origin", "https://attacker.invalid");
+    expect((await POST(req)).status).toBe(403);
+    expect(mocks.createTeamScan).not.toHaveBeenCalled();
+  });
+  it("rejects spoofed image contents and MIME types", async () => {
+    expect((await POST(await request("image/png", true))).status).toBe(422);
+    expect((await POST(await request("image/jpeg"))).status).toBe(422);
+    expect(mocks.createTeamScan).not.toHaveBeenCalled();
+  });
+  it("rejects invalid multipart uploads", async () => {
+    const req = new Request("http://localhost/api/scans", {
+      method: "POST",
+      headers: { origin: "http://localhost" },
+      body: "broken",
+    });
+    expect((await POST(req)).status).toBe(400);
   });
 });

@@ -1,60 +1,26 @@
-import { NextResponse } from "next/server";
-
+import { apiError, requireUuid } from "@/lib/api-error";
 import { requireSession } from "@/lib/http";
+import { authorizedAsset } from "@/lib/team-db";
 import { getStorage } from "@/lib/storage";
-
 export const runtime = "nodejs";
-
-function sanitizeKey(parts: string[]) {
-  return parts.filter((part) => part && part !== "." && part !== "..").join("/");
-}
-
-function isMissingAssetError(error: unknown) {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-
-  if ("code" in error && error.code === "ENOENT") {
-    return true;
-  }
-
-  if ("name" in error && error.name === "NoSuchKey") {
-    return true;
-  }
-
-  return false;
-}
-
 export async function GET(
   _request: Request,
-  { params }: { params: Promise<{ storageKey: string[] }> }
+  c: { params: Promise<{ storageKey: string[] }> },
 ) {
   try {
-    await requireSession();
-  } catch {
-    return new NextResponse("Unauthorized", { status: 401 });
-  }
-
-  const { storageKey } = await params;
-  const key = sanitizeKey(storageKey);
-  if (!key) {
-    return new NextResponse("Not found", { status: 404 });
-  }
-
-  try {
-    const object = await getStorage().getObject(key);
-    return new NextResponse(Buffer.from(object.body), {
-      status: 200,
+    const s = await requireSession(),
+      parts = (await c.params).storageKey,
+      id = requireUuid(parts.length === 1 ? parts[0] : null);
+    const asset = await authorizedAsset(s, id),
+      object = await getStorage().getObject(asset.storage_key);
+    return new Response(Buffer.from(object.body), {
       headers: {
-        "Content-Type": object.contentType,
-        "Cache-Control": "private, max-age=3600"
-      }
+        "Content-Type": asset.content_type,
+        "Cache-Control": "private, no-store",
+        "X-Content-Type-Options": "nosniff",
+      },
     });
   } catch (error) {
-    if (isMissingAssetError(error)) {
-      return new NextResponse("Not found", { status: 404 });
-    }
-
-    throw error;
+    return apiError(error);
   }
 }
