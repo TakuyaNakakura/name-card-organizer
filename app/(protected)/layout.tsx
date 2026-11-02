@@ -8,7 +8,7 @@ export default async function ProtectedLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const session = await requirePageSession("/cards");
+  const session = await requirePageSession("/cards", true);
   return (
     <div className="shell">
       <a href="#main-content" className="skip-link">
@@ -29,6 +29,7 @@ export default async function ProtectedLayout({
                 </span>
               </span>
               <LogoutButton />
+              <Link href="/settings/account">アカウント</Link>
             </div>
           </div>
           <Navigation admin={session.role === "admin"} />

@@ -1,7 +1,11 @@
 import { betterAuth } from "better-auth";
+import { username } from "better-auth/plugins";
 import { Pool } from "pg";
 import { PostgresDialect } from "kysely";
 import { getRequiredEnv } from "@/lib/env";
+import { getAuthSecret, getTeamAuthMode } from "@/lib/auth-config";
+import { validUsername } from "@/lib/credential-policy";
+import { assertPublicDeploymentSafety } from "@/lib/deployment";
 import {
   acceptInvitation,
   invited,
@@ -10,10 +14,11 @@ import {
 } from "@/lib/team-db";
 
 function buildAuth() {
+  const passwordMode = getTeamAuthMode() === "password";
   return betterAuth({
     appName: "名刺インボックス",
     baseURL: getRequiredEnv("BETTER_AUTH_URL"),
-    secret: getRequiredEnv("BETTER_AUTH_SECRET"),
+    secret: getAuthSecret(),
     database: {
       dialect: new PostgresDialect({
         pool: new Pool({
@@ -26,9 +31,41 @@ function buildAuth() {
       type: "postgres",
       schemaName: "name_card_auth",
     },
-    emailAndPassword: { enabled: false },
+    emailAndPassword: {
+      enabled: passwordMode,
+      disableSignUp: true,
+      minPasswordLength: 12,
+      maxPasswordLength: 128,
+    },
+    disabledPaths: [
+      "/sign-up/email",
+      "/sign-in/email",
+      "/is-username-available",
+      "/update-user",
+      "/change-email",
+      "/delete-user",
+      "/request-password-reset",
+      "/reset-password",
+      "/set-password",
+      "/change-password",
+      "/link-social",
+      "/unlink-account",
+      ...(passwordMode ? ["/sign-in/social"] : ["/sign-in/username"]),
+    ],
+    plugins: [
+      username({
+        displayUsername: false,
+        immutableUsername: true,
+        minUsernameLength: 3,
+        maxUsernameLength: 32,
+        usernameValidator: validUsername,
+        validationOrder: { username: "post-normalization" },
+      }),
+    ],
     socialProviders:
-      process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET
+      !passwordMode &&
+      process.env.GOOGLE_CLIENT_ID &&
+      process.env.GOOGLE_CLIENT_SECRET
         ? {
             google: {
               clientId: getRequiredEnv("GOOGLE_CLIENT_ID"),
@@ -47,12 +84,18 @@ function buildAuth() {
       cookiePrefix: "nco-team",
       defaultCookieAttributes: { httpOnly: true, sameSite: "lax" },
     },
-    rateLimit: { enabled: true, storage: "database", window: 60, max: 40 },
+    rateLimit: {
+      enabled: true,
+      storage: "database",
+      window: 60,
+      max: 40,
+      customRules: { "/sign-in/username": { window: 60, max: 20 } },
+    },
     databaseHooks: {
       user: {
         create: {
           before: async (user) =>
-            user.emailVerified && (await invited(user.email))
+            !passwordMode && user.emailVerified && (await invited(user.email))
               ? { data: user }
               : false,
           after: async (user) => {
@@ -67,7 +110,8 @@ function buildAuth() {
             // Recover an interrupted first sign-in without admitting uninvited users.
             const [user] =
               await teamSql()`select email,"emailVerified" from name_card_auth."user" where id=${session.userId}`;
-            return user?.emailVerified &&
+            return !passwordMode &&
+              user?.emailVerified &&
               (await acceptInvitation(session.userId, user.email))
               ? { data: session }
               : false;
@@ -79,5 +123,6 @@ function buildAuth() {
 }
 let instance: ReturnType<typeof buildAuth> | undefined;
 export function getAuth() {
+  assertPublicDeploymentSafety();
   return (instance ??= buildAuth());
 }

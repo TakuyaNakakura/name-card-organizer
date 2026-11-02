@@ -26,7 +26,9 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: ${DATABASE_URL_DOCKER:-postgres://postgres:postgres@postgres:5432/name_card_organizer}
-      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?set BETTER_AUTH_SECRET (32+ random characters)}
+      TEAM_AUTH_MODE: ${TEAM_AUTH_MODE:-password}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-}
+      SESSION_SECRET: ${SESSION_SECRET:-}
       BETTER_AUTH_URL: ${BETTER_AUTH_URL:-http://localhost:3000}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
@@ -67,6 +69,13 @@ services:
     environment:
       DATABASE_MIGRATION_URL: ${DATABASE_MIGRATION_URL_DOCKER:-postgres://postgres:postgres@postgres:5432/name_card_organizer}
       BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-}
+      TEAM_AUTH_MODE: ${TEAM_AUTH_MODE:-password}
+      BOOTSTRAP_ADMIN_USERNAME: ${BOOTSTRAP_ADMIN_USERNAME:-}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
+      BOOTSTRAP_ADMIN_NAME: ${BOOTSTRAP_ADMIN_NAME:-}
+      BOOTSTRAP_EXISTING_ADMIN_EMAIL: ${BOOTSTRAP_EXISTING_ADMIN_EMAIL:-}
+      BOOTSTRAP_EXISTING_ADMIN_USERNAME: ${BOOTSTRAP_EXISTING_ADMIN_USERNAME:-}
+      BOOTSTRAP_RESET_PASSWORD: ${BOOTSTRAP_RESET_PASSWORD:-}
       TEAM_NAME: ${TEAM_NAME:-共有名刺チーム}
     command: ["npm", "run", "team:bootstrap"]
 

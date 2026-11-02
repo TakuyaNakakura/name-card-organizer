@@ -107,7 +107,7 @@ export async function sessionForUser(
   userId: string,
 ): Promise<TeamSession | null> {
   const [r] =
-    await teamSql()`select m.*,u.name,u.email,t.name team_name from name_card.memberships m
+    await teamSql()`select m.*,u.name,u.email,u.username,t.name team_name from name_card.memberships m
     join name_card_auth."user" u on u.id=m.user_id join name_card.teams t on t.id=m.team_id
     where user_id=${userId} and status='active'`;
   return r
@@ -118,6 +118,8 @@ export async function sessionForUser(
         email: r.email,
         role: r.role,
         teamName: r.team_name,
+        username: r.username,
+        passwordChangeRequired: r.password_change_required,
       }
     : null;
 }
@@ -475,7 +477,7 @@ export async function consumeScanQuota(s: TeamSession) {
   });
 }
 export async function members(s: TeamSession) {
-  return teamSql()`select m.user_id,m.role,m.status,u.name,u.email from name_card.memberships m join name_card_auth."user" u on u.id=m.user_id where team_id=${s.teamId} order by m.created_at`;
+  return teamSql()`select m.user_id,m.role,m.status,m.password_change_required,u.name,u.email,u.username from name_card.memberships m join name_card_auth."user" u on u.id=m.user_id where team_id=${s.teamId} order by m.created_at`;
 }
 export async function invitations(s: TeamSession) {
   return teamSql()`select id,email,role,expires_at,accepted_at,revoked_at from name_card.invitations where team_id=${s.teamId} order by created_at desc`;

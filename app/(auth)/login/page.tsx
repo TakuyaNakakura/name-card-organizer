@@ -1,11 +1,17 @@
-import { GoogleLoginButton } from "@/components/auth/auth-actions";
+import {
+  GoogleLoginButton,
+  PasswordLoginForm,
+} from "@/components/auth/auth-actions";
 import { sanitizeNextPath } from "@/lib/url";
+import { getTeamAuthMode } from "@/lib/auth-config";
+export const dynamic = "force-dynamic";
 export default async function LoginPage({
   searchParams,
 }: {
   searchParams: Promise<{ next?: string; reason?: string }>;
 }) {
   const params = await searchParams;
+  const passwordMode = getTeamAuthMode() === "password";
   return (
     <main className="login-page">
       <section className="panel login-panel">
@@ -16,12 +22,22 @@ export default async function LoginPage({
         </p>
         {params.reason && (
           <p className="notice" role="status">
-            招待済みのGoogleアカウントでログインしてください。招待の有効期限は7日間です。参加できない場合は管理者に連絡してください。
+            {params.reason === "PASSWORD_CHANGED"
+              ? "パスワードを変更しました。新しいパスワードでログインしてください。"
+              : passwordMode
+                ? "管理者から案内されたユーザーIDとパスワードでログインしてください。利用できない場合は管理者に連絡してください。"
+                : "招待済みのGoogleアカウントでログインしてください。招待の有効期限は7日間です。参加できない場合は管理者に連絡してください。"}
           </p>
         )}
-        <GoogleLoginButton
-          nextPath={sanitizeNextPath(params.next || "/cards")}
-        />
+        {passwordMode ? (
+          <PasswordLoginForm
+            nextPath={sanitizeNextPath(params.next || "/cards")}
+          />
+        ) : (
+          <GoogleLoginButton
+            nextPath={sanitizeNextPath(params.next || "/cards")}
+          />
+        )}
         <p className="hint">
           名刺画像は保存先ストレージへ送信され、文字の読み取りにはGoogle Cloud
           Visionを使用します。共有する前に本人の情報と内容を確認してください。

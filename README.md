@@ -1,6 +1,8 @@
 # Name Card Organizer
 
-Googleアカウントで参加する、招待制のチーム向け名刺管理アプリです。Next.js App Router / PostgreSQL / Google Cloud Vision / S3互換ストレージを使用します。
+管理者が発行したユーザーID・パスワードで参加する、少人数チーム向け名刺管理アプリです。Googleログインも設定で選べます。Next.js App Router / PostgreSQL / Google Cloud Vision / S3互換ストレージを使用します。
+
+このブランチは `codex/team-password-login`。Google招待方式の版は `codex/team-workflow` に保存しています。[Vercelを維持したアップグレード手順](docs/password-team-deployment.md)を参照してください。
 
 ## 利用フロー
 
@@ -18,22 +20,24 @@ Googleアカウントで参加する、招待制のチーム向け名刺管理�
 
 Node.js 24 LTS / Docker Composeが基準です。`.env.team.example` を参照し、`.env.team.local` に必要な値を設定してください。秘密情報はGitに含めません。
 
-最低限の設定は `BETTER_AUTH_SECRET`（32文字以上のランダム値）、`BETTER_AUTH_URL=http://localhost:3000`、Google OAuthの `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`、初期管理者の `BOOTSTRAP_ADMIN_EMAIL` です。秘密値の生成例は `openssl rand -base64 48` です。
+最低限の設定は `TEAM_AUTH_MODE=password`、`BETTER_AUTH_SECRET`（32文字以上のランダム値）、`BETTER_AUTH_URL=http://localhost:3000`、`BOOTSTRAP_ADMIN_USERNAME`（3〜32文字）と `BOOTSTRAP_ADMIN_PASSWORD`（12〜128文字）です。秘密値の生成例は `openssl rand -base64 48` です。既存の `SESSION_SECRET` が32文字以上なら `BETTER_AUTH_SECRET` の代わりに利用できます。
 
-Google OAuthクライアントは「ウェブアプリケーション」で作成し、リダイレクトURIに `http://localhost:3000/api/auth/callback/google` を登録します。Vision用サービスアカウントとは別の認証情報です。
+Google OAuthの設定は不要です。初期管理者のパスワードは初期化用コンテナにだけ渡し、稼働アプリには渡しません。初期化後は `.env.team.local` の `BOOTSTRAP_ADMIN_PASSWORD` を削除してください。
 
 ```sh
 docker compose --env-file .env.team.local up -d postgres
-docker compose --env-file .env.team.local build app
+docker compose --env-file .env.team.local build app migrate bootstrap
 docker compose --env-file .env.team.local run --rm migrate
 docker compose --env-file .env.team.local run --rm bootstrap
 docker compose --env-file .env.team.local up -d app
 docker compose --env-file .env.team.local logs --tail=100 app
 ```
 
-`http://localhost:3000/login` を開き、指定した管理者のGoogleアカウントでログインしてください。初期化は一度だけです。追加メンバーは「メンバー」画面から招待し、ログインURLを本人に伝えます。招待メールの自動送信はありません。
+`http://localhost:3000/login` を開き、設定した管理者ID・パスワードでログインしてください。初期化は一度だけです。追加メンバーは「メンバー」画面で作成し、表示された一時パスワードを本人に安全な方法で伝えます。初回ログインで変更が必須です。忘れた場合は管理者が再発行できます。本人の変更・管理者の再発行では全端末のセッションが失効します。
 
-DBはホストの `55433`、アプリは `3000` です。スマートフォンのカメラにはHTTPSが必要です。HTTPSトンネル等のURLを `BETTER_AUTH_URL` とGoogleのリダイレクトURIにも設定してください。`APP_PORT` を変更した場合もURLを一致させます。
+DBはホストの `55433`、アプリは `3000` です。スマートフォンのカメラにはHTTPSが必要です。HTTPSトンネル等のURLを `BETTER_AUTH_URL` に設定してください。`APP_PORT` を変更した場合もURLを一致させます。
+
+Google方式を使う場合は `TEAM_AUTH_MODE=google`、`GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`、`BOOTSTRAP_ADMIN_EMAIL` を指定します。OAuthクライアントは「ウェブアプリケーション」とし、リダイレクトURIに `<BETTER_AUTH_URL>/api/auth/callback/google` を登録します。Vision用サービスアカウントとは別です。既存GoogleチームをID方式へ切り替える手順も[導入ガイド](docs/password-team-deployment.md)にあります。
 
 ## 実際のOCRとR2
 
@@ -66,8 +70,8 @@ E2Eは検証DBに短命の実セッションを作成します。公開アプリ
 
 ## Vercelへの切り替え
 
-[チーム版の導入・移行・ロールバック手順](docs/team-deployment.md) を確認してください。旧管理者パスワード方式の環境変数は使いません。旧 `public.cards` を自動変更するコードは廃止し、新版は `name_card` / `name_card_auth` のみを使用します。
+[ID・パスワード版の導入・移行・ロールバック手順](docs/password-team-deployment.md) を確認してください。既存のNeon・R2・Visionを引き続き利用できます。旧共有パスワードの `ADMIN_PASSWORD_HASH` は個人アカウントへ自動変換しません。旧 `public.cards` を自動変更するコードは廃止し、新版は `name_card` / `name_card_auth` のみを使用します。
 
-このブランチをデプロイするだけでは旧データは移りません。本番のバックアップ、明示的なマイグレーション、初期管理者の招待、新認証の設定が必要です。運用切り替えや本番DBの操作は自動実行しません。
+このブランチをデプロイするだけでは旧データは移りません。本番のバックアップ、明示的なマイグレーション、初期管理者の作成が必要です。旧名刺の読み取り専用JSONエクスポートと、確認後の非破壊インポートを用意しています。運用切り替えや本番DBの操作は自動実行しません。
 
 [実装計画](docs/team-use-implementation-plan.md) / [実装・検証状況](docs/team-implementation-status.md)

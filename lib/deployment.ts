@@ -1,5 +1,6 @@
 import { getOptionalEnv, getOcrProvider, getStorageDriver } from "@/lib/env";
 import { isPlaceholderDatabaseUrl } from "@/lib/db";
+import { getTeamAuthMode } from "@/lib/auth-config";
 
 function hasValue(name: string) {
   return getOptionalEnv(name).length > 0;
@@ -21,7 +22,8 @@ export function getPublicDeploymentIssues() {
   }
 
   const issues: string[] = [];
-  const sessionSecret = getOptionalEnv("BETTER_AUTH_SECRET");
+  const sessionSecret =
+    getOptionalEnv("BETTER_AUTH_SECRET") || getOptionalEnv("SESSION_SECRET");
   const databaseUrl = getOptionalEnv("DATABASE_URL");
 
   if (process.env.E2E_BYPASS_AUTH === "true") {
@@ -31,6 +33,10 @@ export function getPublicDeploymentIssues() {
   if (hasValue("ADMIN_PASSWORD")) {
     issues.push("ADMIN_PASSWORD must not be set for public deployment");
   }
+  if (hasValue("BOOTSTRAP_ADMIN_PASSWORD"))
+    issues.push(
+      "BOOTSTRAP_ADMIN_PASSWORD is operator-only; remove it from the running application",
+    );
 
   if (!databaseUrl) {
     issues.push("DATABASE_URL is required for public deployment");
@@ -47,8 +53,9 @@ export function getPublicDeploymentIssues() {
   }
 
   for (const name of [
-    "GOOGLE_CLIENT_ID",
-    "GOOGLE_CLIENT_SECRET",
+    ...(getTeamAuthMode() === "google"
+      ? ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"]
+      : []),
     "BETTER_AUTH_URL",
     "CRON_SECRET",
   ]) {
@@ -67,7 +74,7 @@ export function getPublicDeploymentIssues() {
 
   if (sessionSecret.length < 32) {
     issues.push(
-      "BETTER_AUTH_SECRET must be at least 32 characters for public deployment",
+      "BETTER_AUTH_SECRET or SESSION_SECRET must be at least 32 characters for public deployment",
     );
   }
 

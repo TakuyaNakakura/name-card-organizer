@@ -1,11 +1,25 @@
 import { beforeAll, afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
+import {
+  mkdtemp,
+  mkdir,
+  writeFile,
+  readFile,
+  rm,
+  stat,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import postgres from "postgres";
 import sharp from "sharp";
+import { verifyPassword } from "better-auth/crypto";
+import {
+  changeOwnPassword,
+  consumeCredentialAttempt,
+  createPasswordMember,
+  resetMemberPassword,
+} from "@/lib/credentials";
 import {
   acceptInvitation,
   authorizedAsset,
@@ -103,6 +117,259 @@ const scan = (s = owner, id = randomUUID()) =>
   createTeamScan(s, id, image, image);
 
 describe("team database and image security", () => {
+  it("bootstraps a fresh password team and copies a fixed legacy export without mutating it", async () => {
+    const dbName =
+      "name_card_test_" + randomUUID().replaceAll("-", "").slice(0, 16);
+    const isolatedUrl = new URL(url!);
+    isolatedUrl.pathname = "/" + dbName;
+    const root = await mkdtemp(path.join(tmpdir(), "name-card-bootstrap-"));
+    await sql`create database ${sql(dbName)}`;
+    const isolated = postgres(isolatedUrl.toString(), {
+      max: 1,
+      prepare: false,
+    });
+    const env = {
+      ...process.env,
+      DATABASE_MIGRATION_URL: isolatedUrl.toString(),
+      TEAM_AUTH_MODE: "password",
+      BOOTSTRAP_ADMIN_USERNAME: "initial-admin",
+      BOOTSTRAP_ADMIN_PASSWORD: "unique-initial-admin-password-2026",
+      BOOTSTRAP_EXISTING_ADMIN_EMAIL: "",
+      BOOTSTRAP_EXISTING_ADMIN_USERNAME: "",
+      BOOTSTRAP_RESET_PASSWORD: "",
+    };
+    try {
+      execFileSync(process.execPath, ["scripts/migrate.mjs"], {
+        env,
+        stdio: "pipe",
+      });
+      execFileSync(process.execPath, ["scripts/bootstrap-team.mjs"], {
+        env,
+        stdio: "pipe",
+      });
+      expect(() =>
+        execFileSync(process.execPath, ["scripts/bootstrap-team.mjs"], {
+          env,
+          stdio: "pipe",
+        }),
+      ).toThrow();
+      const [user] =
+        await isolated`select u.*,a.password,m.team_id from name_card_auth."user" u join name_card_auth.account a on a."userId"=u.id join name_card.memberships m on m.user_id=u.id`;
+      expect(user.username).toBe("initial-admin");
+      expect(
+        await verifyPassword({
+          hash: user.password,
+          password: env.BOOTSTRAP_ADMIN_PASSWORD,
+        }),
+      ).toBe(true);
+      const id = randomUUID();
+      await isolated`create table public.cards(id uuid primary key,full_name text,organization text,job_title text,email text,
+        original_image_url text,corrected_image_url text,raw_ocr_text text,extraction_confidence real,status text,created_at timestamptz,updated_at timestamptz)`;
+      await isolated`insert into public.cards values(${id},'移行テスト','旧組織','担当','legacy@example.test','','','原文保持',0.8,'confirmed','2026-03-15T00:00:00Z','2026-03-16T00:00:00Z')`;
+      const manifest = path.join(root, "legacy.json");
+      const transfer = {
+        ...env,
+        LEGACY_DATABASE_URL: isolatedUrl.toString(),
+        LEGACY_EXPORT_FILE: manifest,
+        EXPORT_LEGACY_CARDS: "YES",
+        LEGACY_IMPORT_FILE: manifest,
+        IMPORT_TEAM_ID: user.team_id,
+        IMPORT_OWNER_USERNAME: user.username,
+        IMPORT_OWNER_EMAIL: "",
+        APPLY_LEGACY_IMPORT: "YES",
+        STORAGE_DRIVER: "local",
+        LOCAL_UPLOAD_DIR: root,
+      };
+      execFileSync(process.execPath, ["scripts/export-legacy-cards.mjs"], {
+        env: transfer,
+        stdio: "pipe",
+      });
+      expect((await stat(manifest)).mode & 0o777).toBe(0o600);
+      expect(() =>
+        execFileSync(process.execPath, ["scripts/export-legacy-cards.mjs"], {
+          env: transfer,
+          stdio: "pipe",
+        }),
+      ).toThrow();
+      execFileSync(process.execPath, ["scripts/import-legacy-cards.mjs"], {
+        env: transfer,
+        stdio: "pipe",
+      });
+      const [record] =
+        await isolated`select full_name,raw_ocr_text,created_at,created_by from name_card.cards where id=${id}`;
+      expect(record.full_name).toBe("移行テスト");
+      expect(record.raw_ocr_text).toBe("原文保持");
+      expect(record.created_at.toISOString()).toBe("2026-03-15T00:00:00.000Z");
+      expect(record.created_by).toBeNull();
+      expect(
+        await isolated`select 1 from public.cards where id=${id}`,
+      ).toHaveLength(1);
+      const recovery = {
+        ...env,
+        BOOTSTRAP_EXISTING_ADMIN_USERNAME: user.username,
+        BOOTSTRAP_RESET_PASSWORD: "YES",
+        BOOTSTRAP_ADMIN_PASSWORD: "recovered-unique-admin-password-2026",
+      };
+      execFileSync(process.execPath, ["scripts/bootstrap-team.mjs"], {
+        env: recovery,
+        stdio: "pipe",
+      });
+      const [updated] =
+        await isolated`select password from name_card_auth.account where "userId"=${user.id}`;
+      expect(
+        await verifyPassword({
+          hash: updated.password,
+          password: recovery.BOOTSTRAP_ADMIN_PASSWORD,
+        }),
+      ).toBe(true);
+    } finally {
+      await isolated.end();
+      await sql`drop database ${sql(dbName)}`;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+  it("provisions hashed password members and resets without changing ownership", async () => {
+    const username = "member-" + randomUUID().slice(0, 8);
+    await expect(
+      createPasswordMember(owner, { username, name: "不可", role: "member" }),
+    ).rejects.toMatchObject({ status: 403 });
+    const created = await createPasswordMember(admin, {
+      username: username.toUpperCase(),
+      name: "新メンバー",
+      role: "member",
+    });
+    expect(created.username).toBe(username);
+    let member = (await sessionForUser(created.userId))!;
+    expect(member.passwordChangeRequired).toBe(true);
+    const [account] =
+      await sql`select password from name_card_auth.account where "userId"=${created.userId}`;
+    expect(account.password).not.toBe(created.temporaryPassword);
+    expect(
+      await verifyPassword({
+        hash: account.password,
+        password: created.temporaryPassword,
+      }),
+    ).toBe(true);
+    await expect(
+      createPasswordMember(admin, { username, name: "重複", role: "member" }),
+    ).rejects.toMatchObject({ code: "USERNAME_TAKEN" });
+    await expect(
+      resetMemberPassword(owner, created.userId),
+    ).rejects.toMatchObject({ status: 403 });
+    await expect(
+      resetMemberPassword(outsider, created.userId),
+    ).rejects.toMatchObject({ status: 404 });
+    await expect(
+      resetMemberPassword(admin, admin.userId),
+    ).rejects.toMatchObject({ code: "USE_PASSWORD_CHANGE" });
+    await sql`insert into name_card_auth.session(id,token,"userId","expiresAt") values(${randomUUID()},${randomUUID()},${created.userId},now()+interval '1 day')`;
+    await expect(
+      changeOwnPassword(member, {
+        currentPassword: "not-the-password",
+        newPassword: "new-unique-passphrase-2026",
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_CURRENT_PASSWORD" });
+    expect(
+      await sql`select 1 from name_card_auth.session where "userId"=${created.userId}`,
+    ).toHaveLength(1);
+    await changeOwnPassword(member, {
+      currentPassword: created.temporaryPassword,
+      newPassword: "new-unique-passphrase-2026",
+    });
+    member = (await sessionForUser(created.userId))!;
+    expect(member.passwordChangeRequired).toBe(false);
+    expect(
+      await sql`select 1 from name_card_auth.session where "userId"=${created.userId}`,
+    ).toHaveLength(0);
+    const draft = await scan(member),
+      card = await confirmDraft(member, draft.id, draft.version);
+    const reset = await resetMemberPassword(admin, member.userId);
+    expect(reset.temporaryPassword).not.toBe(created.temporaryPassword);
+    expect((await sessionForUser(member.userId))?.passwordChangeRequired).toBe(
+      true,
+    );
+    expect((await getCard(admin, card.id)).createdBy).toBe(member.userId);
+    const events =
+      await sql`select * from name_card.audit_events where target_id=${member.userId}`;
+    expect(JSON.stringify(events)).not.toContain(reset.temporaryPassword);
+    expect(JSON.stringify(events)).not.toContain(created.temporaryPassword);
+  });
+  it("converts only an explicitly selected existing admin and refuses accidental password overwrite", async () => {
+    const [user] =
+      await sql`select email from name_card_auth."user" where id=${admin.userId}`;
+    const env = {
+      ...process.env,
+      DATABASE_MIGRATION_URL: url,
+      TEAM_AUTH_MODE: "password",
+      BOOTSTRAP_ADMIN_USERNAME: "operator-" + randomUUID().slice(0, 8),
+      BOOTSTRAP_ADMIN_PASSWORD: "operator-unique-passphrase-2026",
+      BOOTSTRAP_EXISTING_ADMIN_EMAIL: user.email,
+      BOOTSTRAP_RESET_PASSWORD: "",
+    };
+    execFileSync(process.execPath, ["scripts/bootstrap-team.mjs"], {
+      env,
+      stdio: "pipe",
+    });
+    expect((await sessionForUser(admin.userId))?.username).toBe(
+      env.BOOTSTRAP_ADMIN_USERNAME,
+    );
+    expect(() =>
+      execFileSync(process.execPath, ["scripts/bootstrap-team.mjs"], {
+        env,
+        stdio: "pipe",
+      }),
+    ).toThrow();
+    expect(
+      await sql`select * from public.cards where id='other-service'`,
+    ).toHaveLength(1);
+    const root = await mkdtemp(
+      path.join(tmpdir(), "name-card-password-import-"),
+    );
+    try {
+      const manifest = path.join(root, "empty.json");
+      await writeFile(manifest, "[]");
+      execFileSync(process.execPath, ["scripts/import-legacy-cards.mjs"], {
+        env: {
+          ...process.env,
+          DATABASE_MIGRATION_URL: url,
+          LEGACY_IMPORT_FILE: manifest,
+          IMPORT_TEAM_ID: teamId,
+          IMPORT_OWNER_EMAIL: "",
+          IMPORT_OWNER_USERNAME: env.BOOTSTRAP_ADMIN_USERNAME,
+          APPLY_LEGACY_IMPORT: "",
+        },
+        stdio: "pipe",
+      });
+      const output = path.join(root, "must-not-exist.json");
+      expect(() =>
+        execFileSync(process.execPath, ["scripts/export-legacy-cards.mjs"], {
+          env: {
+            ...process.env,
+            LEGACY_DATABASE_URL: url,
+            LEGACY_EXPORT_FILE: output,
+            EXPORT_LEGACY_CARDS: "YES",
+          },
+          stdio: "pipe",
+        }),
+      ).toThrow();
+      await expect(readFile(output)).rejects.toThrow();
+      expect(
+        (
+          await sql`select issuer,name from public.cards where id='other-service'`
+        )[0],
+      ).toEqual({ issuer: "sentinel", name: "unchanged" });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+  it("limits credential attempts atomically across concurrent instances", async () => {
+    const scope = randomUUID();
+    const attempts = await Promise.allSettled(
+      Array.from({ length: 12 }, () => consumeCredentialAttempt(scope, 5)),
+    );
+    expect(attempts.filter((r) => r.status === "fulfilled")).toHaveLength(5);
+    expect(attempts.filter((r) => r.status === "rejected")).toHaveLength(7);
+  });
   it("copies reviewed legacy data without modifying source records or images", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "name-card-import-")),
       id = randomUUID(),

@@ -1,5 +1,7 @@
 # チーム版導入・移行手順
 
+この文書はGoogle招待方式（`TEAM_AUTH_MODE=google`）のガイドです。`codex/team-password-login` の標準はID・パスワード方式です。[こちらの導入手順](password-team-deployment.md)を優先してください。
+
 ## 重要な変更
 
 - パスワード共有ログイン・旧JWT cookie・OCR原文入りdraftTokenは廃止。Google認証とDBセッションに置き換えました。
@@ -12,18 +14,18 @@
 
 Production / Previewでそれぞれ専用DB・OAuth許可URL・非公開ストレージを使用します。Previewを本番DBに接続しないでください。
 
-| 変数 | 設定 |
-| --- | --- |
-| `DATABASE_URL` | 専用Neonのruntimeロール接続URL。別サービスと共有しない。Vercel統合管理の変数ならresourceの接続先を変更 |
-| `BETTER_AUTH_URL` | 公開URLの正確なorigin。例 `https://your-app.vercel.app` |
-| `BETTER_AUTH_SECRET` | 32文字以上のランダム値。Googleのキーとは別。変更時は既存セッション・暗号化済みOAuth情報に注意 |
-| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Google OAuthのウェブクライアント |
-| `OCR_PROVIDER` | `google` |
-| `GOOGLE_CLOUD_CREDENTIALS_JSON` | Vision用サービスアカウントJSON。Vercelの入力欄には1行JSONをそのまま入力し、dotenv用の外側の引用符は付けない |
-| `STORAGE_DRIVER` | `s3` |
-| `S3_ENDPOINT` / `S3_REGION` / `S3_BUCKET` | R2のS3エンドポイント / `auto` / 非公開バケット |
-| `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` | 対象バケットに限定した読み書き・削除キー。`NEXT_PUBLIC_` は絶対に付けない |
-| `CRON_SECRET` | 別の32文字以上のランダム値。Vercel CronのAuthorization認証に利用 |
+| 変数                                        | 設定                                                                                                        |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`                              | 専用Neonのruntimeロール接続URL。別サービスと共有しない。Vercel統合管理の変数ならresourceの接続先を変更      |
+| `BETTER_AUTH_URL`                           | 公開URLの正確なorigin。例 `https://your-app.vercel.app`                                                     |
+| `BETTER_AUTH_SECRET`                        | 32文字以上のランダム値。Googleのキーとは別。変更時は既存セッション・暗号化済みOAuth情報に注意               |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Google OAuthのウェブクライアント                                                                            |
+| `OCR_PROVIDER`                              | `google`                                                                                                    |
+| `GOOGLE_CLOUD_CREDENTIALS_JSON`             | Vision用サービスアカウントJSON。Vercelの入力欄には1行JSONをそのまま入力し、dotenv用の外側の引用符は付けない |
+| `STORAGE_DRIVER`                            | `s3`                                                                                                        |
+| `S3_ENDPOINT` / `S3_REGION` / `S3_BUCKET`   | R2のS3エンドポイント / `auto` / 非公開バケット                                                              |
+| `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` | 対象バケットに限定した読み書き・削除キー。`NEXT_PUBLIC_` は絶対に付けない                                   |
+| `CRON_SECRET`                               | 別の32文字以上のランダム値。Vercel CronのAuthorization認証に利用                                            |
 
 `DATABASE_MIGRATION_URL` は運用端末だけで使用し、Vercelの稼働アプリには設定しません。公開設定ガードで拒否します。`BOOTSTRAP_ADMIN_EMAIL` は初期化用だけです。
 

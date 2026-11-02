@@ -9,11 +9,13 @@ if (
   !process.env.LEGACY_IMPORT_FILE ||
   !process.env.DATABASE_MIGRATION_URL ||
   !process.env.IMPORT_TEAM_ID ||
-  !process.env.IMPORT_OWNER_EMAIL
+  (!process.env.IMPORT_OWNER_EMAIL && !process.env.IMPORT_OWNER_USERNAME)
 )
   throw new Error(
-    "Set LEGACY_IMPORT_FILE, DATABASE_MIGRATION_URL, IMPORT_TEAM_ID and IMPORT_OWNER_EMAIL",
+    "Set LEGACY_IMPORT_FILE, DATABASE_MIGRATION_URL, IMPORT_TEAM_ID and either IMPORT_OWNER_EMAIL or IMPORT_OWNER_USERNAME",
   );
+if (process.env.IMPORT_OWNER_EMAIL && process.env.IMPORT_OWNER_USERNAME)
+  throw new Error("Select the import operator by email OR username, not both");
 const rows = JSON.parse(await readFile(process.env.LEGACY_IMPORT_FILE, "utf8"));
 if (!Array.isArray(rows))
   throw new Error("Expected a reviewed array of legacy CardRecord objects");
@@ -80,8 +82,14 @@ const s3 =
 const bucket = process.env.S3_BUCKET,
   root = path.resolve(process.env.LOCAL_UPLOAD_DIR || "var/uploads");
 try {
+  const operatorEmail =
+    process.env.IMPORT_OWNER_EMAIL?.trim().toLowerCase() || "";
+  const operatorUsername =
+    process.env.IMPORT_OWNER_USERNAME?.trim().toLowerCase() || "";
   const [owner] =
-    await sql`select m.user_id from name_card.memberships m join name_card_auth."user" u on u.id=m.user_id where m.team_id=${process.env.IMPORT_TEAM_ID} and lower(u.email)=${process.env.IMPORT_OWNER_EMAIL.toLowerCase()} and m.role='admin' and m.status='active'`;
+    await sql`select m.user_id from name_card.memberships m join name_card_auth."user" u on u.id=m.user_id where m.team_id=${process.env.IMPORT_TEAM_ID}
+      and ((${operatorEmail}<>'' and lower(u.email)=${operatorEmail}) or (${operatorUsername}<>'' and u.username=${operatorUsername}))
+      and m.role='admin' and m.status='active'`;
   if (!owner)
     throw new Error(
       "The explicitly selected owner must be an active team administrator",

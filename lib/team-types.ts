@@ -5,6 +5,8 @@ export interface TeamSession {
   email: string;
   teamName: string;
   role: "admin" | "member";
+  username?: string | null;
+  passwordChangeRequired?: boolean;
 }
 
 export interface ContactFields {
