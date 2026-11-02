@@ -20,6 +20,12 @@ async function upload(page: import("@playwright/test").Page) {
     page.getByText("下書きを保存しました。まだチームには共有されていません。"),
   ).toBeVisible();
 }
+test("operations shows the hourly member and team OCR limits", async ({ page }) => {
+  await page.goto("/settings/operations");
+  await expect(
+    page.getByText("今の時間帯のOCR実行予約：0 / 150回（各メンバー100回まで）"),
+  ).toBeVisible();
+});
 test("upload, optional email, sharing, editing, CSV and trash recovery", async ({
   page,
   browser,

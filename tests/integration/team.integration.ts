@@ -566,20 +566,74 @@ describe("team database and image security", () => {
     await setCardDeleted(admin, card.id, deleted.version, true);
     expect((await getCard(peer, card.id)).deletedAt).toBeNull();
   });
-  it("serializes scans per person and uses atomic shared quotas", async () => {
+  it("serializes scans per person", async () => {
     const person = { ...peer, userId: owner.userId };
     const pending = await reserveDraft(person, randomUUID());
     await expect(reserveDraft(person, randomUUID())).rejects.toMatchObject({
       code: "SCAN_BUSY",
     });
     await sql`update name_card.drafts set status='failed' where id=${pending.id}`;
-    const scope = "user:" + peer.userId;
-    await sql`insert into name_card.usage_counters(scope,window_start,count) values(${scope},date_trunc('hour',now()),29) on conflict(scope,window_start) do update set count=29`;
+  });
+  it("allows the 100th member scan and atomically rejects the 101st", async () => {
+    const member = { ...peer, userId: randomUUID(), teamId: randomUUID() };
+    const userScope = "user:" + member.userId;
+    const teamScope = "team:" + member.teamId;
+    await sql`insert into name_card.usage_counters(scope,window_start,count) values
+      (${userScope},date_trunc('hour',now()),99),(${teamScope},date_trunc('hour',now()),99)`;
     const settled = await Promise.allSettled([
-      consumeScanQuota(peer),
-      consumeScanQuota(peer),
+      consumeScanQuota(member),
+      consumeScanQuota(member),
     ]);
     expect(settled.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    const rejected = settled.filter((r) => r.status === "rejected");
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0].reason).toMatchObject({ status: 429, code: "SCAN_LIMIT" });
+    const counters = await sql`select count from name_card.usage_counters
+      where scope in (${userScope},${teamScope}) and window_start=date_trunc('hour',now())`;
+    expect(counters.map((r) => r.count)).toEqual([100, 100]);
+  });
+  it("keeps each member's 100-scan allowance independent", async () => {
+    const member = { ...peer, userId: randomUUID(), teamId: randomUUID() };
+    const teammate = { ...member, userId: randomUUID() };
+    const userScope = "user:" + member.userId;
+    const teammateScope = "user:" + teammate.userId;
+    const teamScope = "team:" + member.teamId;
+    await sql`insert into name_card.usage_counters(scope,window_start,count) values
+      (${userScope},date_trunc('hour',now()),100),(${teamScope},date_trunc('hour',now()),100)`;
+    await consumeScanQuota(teammate);
+    await expect(consumeScanQuota(member)).rejects.toMatchObject({
+      status: 429,
+      code: "SCAN_LIMIT",
+    });
+    const [user] = await sql`select count from name_card.usage_counters
+      where scope=${teammateScope} and window_start=date_trunc('hour',now())`;
+    const [team] = await sql`select count from name_card.usage_counters
+      where scope=${teamScope} and window_start=date_trunc('hour',now())`;
+    expect(user.count).toBe(1);
+    expect(team.count).toBe(101);
+  });
+  it("keeps the team limit at 150 without charging rejected member scans", async () => {
+    const member = { ...peer, userId: randomUUID(), teamId: randomUUID() };
+    const teammate = { ...member, userId: randomUUID() };
+    const teamScope = "team:" + member.teamId;
+    const userScope = "user:" + member.userId;
+    const teammateScope = "user:" + teammate.userId;
+    await sql`insert into name_card.usage_counters(scope,window_start,count)
+      values(${teamScope},date_trunc('hour',now()),149)`;
+    const settled = await Promise.allSettled([
+      consumeScanQuota(member),
+      consumeScanQuota(teammate),
+    ]);
+    expect(settled.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    const rejected = settled.filter((r) => r.status === "rejected");
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0].reason).toMatchObject({ status: 429, code: "SCAN_LIMIT" });
+    const [team] = await sql`select count from name_card.usage_counters
+      where scope=${teamScope} and window_start=date_trunc('hour',now())`;
+    const [users] = await sql`select coalesce(sum(count),0)::int total from name_card.usage_counters
+      where scope in (${userScope},${teammateScope}) and window_start=date_trunc('hour',now())`;
+    expect(team.count).toBe(150);
+    expect(users.total).toBe(1);
   });
   it("revokes suspended members and protects the last administrator", async () => {
     await expect(

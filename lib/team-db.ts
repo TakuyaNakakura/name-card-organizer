@@ -3,6 +3,7 @@ import postgres, { type Sql } from "postgres";
 import { ApiError } from "@/lib/api-error";
 import { getRequiredEnv } from "@/lib/env";
 import { contactFieldErrors } from "@/lib/contact-fields";
+import { OCR_LIMITS } from "@/lib/ocr-limits";
 import type {
   ContactFields,
   TeamCard,
@@ -461,8 +462,8 @@ export async function consumeScanQuota(s: TeamSession) {
   const sql = teamSql();
   await transaction(async (tx) => {
     for (const [scope, limit] of [
-      [`user:${s.userId}`, 30],
-      [`team:${s.teamId}`, 150],
+      [`user:${s.userId}`, OCR_LIMITS.perMemberPerHour],
+      [`team:${s.teamId}`, OCR_LIMITS.perTeamPerHour],
     ] as const) {
       const [r] =
         await tx`insert into name_card.usage_counters(scope,window_start,count) values(${scope},date_trunc('hour',now()),1)
