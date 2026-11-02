@@ -93,6 +93,14 @@ STORAGE_DRIVER=s3
 
 認証には既存依存の[Better Auth Username plugin](https://better-auth.com/docs/plugins/username)を使用し、新しい認証ライブラリは追加していません。パスワード変更/再発行はアプリ側で権限確認・更新・セッション失効・監査をまとめてトランザクション化しています。
 
+## Vercelビルド
+
+`vercel.json` の `buildCommand` は `npm run build` を指定しています。`prebuild` によるOpenCVランタイムの配信準備を含めてビルドするため、`next build` の直接実行へ変更しないでください。
+
+`.vercelignore` はテスト本体とPlaywright/Vitestの設定ファイルをまとめて除外します。テストディレクトリだけを除外すると、残った `playwright.config.ts` の `tests/e2e/support` 参照が解決できず、Vercelだけで型検査が失敗します。アプリの型検査を無効にして回避しません。通常のCI・Dockerビルドではテスト一式を保持して検証します。
+
+修正を反映する際は、古いデプロイの再実行ではなく、修正コミットを含む最新のPreviewを確認してください。型検査を通過した後も、この文書の環境変数・DB準備は別途必要です。
+
 ## API契約
 
 名刺・下書きのAPIはGoogleチーム版から変更していません。認証とメンバー画面の呼び出し元を次の契約へ更新しました。

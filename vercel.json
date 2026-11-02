@@ -1,1 +1,4 @@
-{ "crons": [{ "path": "/api/maintenance/cleanup", "schedule": "0 18 * * *" }] }
+{
+  "buildCommand": "npm run build",
+  "crons": [{ "path": "/api/maintenance/cleanup", "schedule": "0 18 * * *" }]
+}

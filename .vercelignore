@@ -1,8 +1,5 @@
 .DS_Store
-.env
-.env.local
-.env.compose.local
-.env.vercel
+.env*
 .next
 coverage
 docker-compose.google-ocr.yml
@@ -12,4 +9,9 @@ playwright-report
 secrets
 test-results
 tests
+**/*.test.ts
+**/*.test.tsx
+playwright.config.ts
+vitest.config.ts
+vitest.integration.config.ts
 var/uploads
