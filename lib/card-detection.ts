@@ -22,8 +22,8 @@ function centroid(points: Point[]) {
 }
 
 export function normalizeQuadrilateral(points: Point[]): Quadrilateral {
-  if (points.length !== 4) {
-    throw new Error("Quadrilateral requires four points");
+  if (points.length !== 4 || points.some((point) => !Number.isFinite(point.x) || !Number.isFinite(point.y))) {
+    throw new Error("Quadrilateral requires four finite points");
   }
 
   const center = centroid(points);
@@ -42,9 +42,28 @@ export function normalizeQuadrilateral(points: Point[]): Quadrilateral {
     .slice(topLeftIndex)
     .concat(sorted.slice(0, topLeftIndex)) as [Point, Point, Point, Point];
 
-  return {
-    points: rotated
-  };
+  const quad = { points: rotated };
+  if (!hasValidCorners(quad)) throw new Error("Quadrilateral must be convex with four distinct corners");
+  return quad;
+}
+
+function hasValidCorners(quad: Quadrilateral) {
+  let direction = 0;
+  for (let index = 0; index < 4; index++) {
+    const a = quad.points[index], b = quad.points[(index + 1) % 4], c = quad.points[(index + 2) % 4];
+    if (![a.x, a.y, b.x, b.y].every(Number.isFinite) || distance(a, b) < 2) return false;
+    const cross = (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x);
+    if (Math.abs(cross) < 1 || (direction && Math.sign(cross) !== direction)) return false;
+    direction = Math.sign(cross);
+  }
+  return true;
+}
+
+export function isQuadInsideFrame(quad: Quadrilateral, width: number, height: number) {
+  const margin = Math.max(2, Math.min(width, height) * 0.012);
+  return hasValidCorners(quad) && quad.points.every((point) =>
+    point.x >= margin && point.y >= margin && point.x <= width - margin && point.y <= height - margin,
+  );
 }
 
 export function calculateAspectRatio(quad: Quadrilateral) {
@@ -81,7 +100,7 @@ export function scoreQuadrilateral(
   frameWidth: number,
   frameHeight: number
 ) {
-  if (!isBusinessCardRatio(quad)) {
+  if (!isQuadInsideFrame(quad, frameWidth, frameHeight) || !isBusinessCardRatio(quad)) {
     return 0;
   }
 
@@ -106,5 +125,7 @@ export function areQuadsStable(
   const centerDistance = distance(previousCenter, nextCenter);
   const areaDelta = Math.abs(previousArea - nextArea) / Math.max(previousArea, 1);
 
-  return centerDistance < 24 && areaDelta < 0.18;
+  const cornerDelta = Math.max(...previous.points.map((point, index) => distance(point, next.points[index])));
+  return centerDistance < 24 && areaDelta < 0.18 &&
+    cornerDelta / Math.max(Math.sqrt(previousArea), 1) < 0.055;
 }

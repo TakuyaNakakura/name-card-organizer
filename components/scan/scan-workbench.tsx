@@ -13,6 +13,7 @@ import type { TeamDraft, TeamCard } from "@/lib/team-types";
 import { DraftReview } from "@/components/drafts/draft-review";
 import {
   createUploadBlob,
+  correctCapturedCard,
   detectQuad,
   ensureCvRuntime,
   getCameraFailureMessage,
@@ -36,8 +37,7 @@ export function ScanWorkbench({
     gate = useRef({ ...freshCaptureGate }),
     inFlight = useRef(false),
     stable = useRef({ quad: null as Quadrilateral | null, count: 0, since: 0 });
-  const activeQuad = useRef<Quadrilateral | null>(null),
-    captureAction = useRef<() => void>(() => {}),
+  const captureAction = useRef<() => void>(() => {}),
     mounted = useRef(true);
   const [camera, setCamera] = useState<"idle" | "starting" | "live" | "error">(
       "idle",
@@ -89,7 +89,7 @@ export function ScanWorkbench({
       })
       .catch(() => {
         if (mounted.current)
-          setCvStatus("読み込み失敗。手動撮影・画像選択は利用できます");
+          setCvStatus("画像補正の読み込み失敗。再読み込みするか、画像選択を利用してください");
       });
     return () => {
       mounted.current = false;
@@ -137,11 +137,10 @@ export function ScanWorkbench({
       try {
         next = detectQuad(cv.current, canvas);
       } catch {
-        setCvStatus("枠検出に失敗。手動撮影は利用できます");
+        setCvStatus("枠検出に失敗。名刺全体を画面に入れて撮り直してください");
         return;
       }
       setQuad(next);
-      activeQuad.current = next;
       gate.current = observeCaptureGate(gate.current, Boolean(next));
       setWaiting(gate.current.waitingForRemoval);
       const previous = stable.current;
@@ -266,24 +265,9 @@ export function ScanWorkbench({
       const context = source.getContext("2d");
       if (!context) throw new Error("撮影画像を取得できません。");
       context.drawImage(v, 0, 0);
-      const original = await createUploadBlob(source),
-        q = activeQuad.current;
-      const corrected =
-        q && cv.current && analysis.current
-          ? await createUploadBlob(
-              await warpPerspective(
-                cv.current,
-                source,
-                mapQuadToSource(
-                  q,
-                  source.width,
-                  source.height,
-                  analysis.current.width,
-                  analysis.current.height,
-                ),
-              ),
-            )
-          : original;
+      const correctedCanvas = await correctCapturedCard(cv.current, source);
+      const original = await createUploadBlob(source);
+      const corrected = await createUploadBlob(correctedCanvas);
       setMessage("名刺を撮影しました。読み取り中です…");
       await submitScan(original, corrected);
     } catch (e) {
@@ -531,7 +515,7 @@ export function ScanWorkbench({
               </button>
               <button
                 className="secondary-button"
-                disabled={inputBlocked || camera !== "live"}
+                disabled={inputBlocked || camera !== "live" || !cv.current}
                 onClick={() => void capture()}
               >
                 手動で撮影
