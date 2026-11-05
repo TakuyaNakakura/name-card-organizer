@@ -1,4 +1,4 @@
-import { beforeAll, afterAll, describe, expect, it } from "vitest";
+import { beforeAll, afterAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import {
@@ -37,7 +37,8 @@ import {
   setCardDeleted,
   teamSql,
 } from "@/lib/team-db";
-import { createTeamScan } from "@/lib/team-scan-service";
+import { createTeamScan, retryTeamScan } from "@/lib/team-scan-service";
+import { getOcrClient } from "@/lib/ocr";
 import { runMaintenance } from "@/lib/maintenance";
 import type { TeamSession } from "@/lib/team-types";
 
@@ -488,6 +489,38 @@ describe("team database and image security", () => {
     expect(await acceptInvitation(id, email)).toBe(true);
     expect((await sessionForUser(id))?.role).toBe("member");
     expect(await invited(email)).toBe(false);
+  });
+  it("persists normalized OCR fields through retry and confirmation, preserving raw text and manual edits", async () => {
+    const rawText = "株 式 会 社 サ ン プ ル\n山 田 太 郎\n営 業 課 課 長\ntaro@example.test";
+    const recognize = vi.spyOn(getOcrClient(), "recognize").mockResolvedValue({
+      rawText,
+      overallConfidence: 0.95,
+      blocks: rawText.split("\n").map((text, index) => ({
+        text,
+        confidence: 0.95,
+        bounds: { x: 10, y: index * 60, width: 250, height: index === 1 ? 44 : 28 },
+      })),
+    });
+    try {
+      let draft = await scan();
+      expect(draft.fullName).toBe("山田太郎");
+      const failedClientId = randomUUID();
+      recognize.mockRejectedValueOnce(new Error("OCR failure for retry test"));
+      await expect(scan(owner, failedClientId)).rejects.toMatchObject({ code: "OCR_FAILED" });
+      const [failed] = await sql`select id from name_card.drafts where owner_id=${owner.userId} and client_scan_id=${failedClientId}`;
+      draft = await retryTeamScan(owner, failed.id);
+      expect((await getDraft(owner, draft.id)).jobTitle).toBe("営業課課長");
+      const card = await confirmDraft(owner, draft.id, draft.version);
+      expect((await getCard(owner, card.id)).organization).toBe("株式会社サンプル");
+      const [stored] = await sql`select raw_ocr_text from name_card.cards where id=${card.id}`;
+      expect(stored.raw_ocr_text).toBe(rawText);
+      const edited = await editCard(owner, card.id, card.version, {
+        fullName: "山田 太郎", organization: card.organization, jobTitle: card.jobTitle, email: card.email,
+      });
+      expect(edited.fullName).toBe("山田 太郎");
+    } finally {
+      recognize.mockRestore();
+    }
   });
   it("keeps drafts and images private, including from administrators", async () => {
     const d = await scan();
