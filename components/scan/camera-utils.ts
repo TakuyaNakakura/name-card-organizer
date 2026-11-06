@@ -91,8 +91,13 @@ export async function loadImageElement(file: File) {
   const objectUrl = URL.createObjectURL(file);
   const image = new Image();
   image.src = objectUrl;
-  await image.decode();
-  return { image, objectUrl };
+  try {
+    await image.decode();
+    return { image, objectUrl };
+  } catch (error) {
+    URL.revokeObjectURL(objectUrl);
+    throw error;
+  }
 }
 
 function isOpenCvModule(value: unknown): value is OpenCvModule {
