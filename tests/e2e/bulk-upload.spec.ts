@@ -8,6 +8,7 @@ import { provisionSession, testUrl } from "./support";
 test.beforeEach(async ({ context, page }) => {
   await provisionSession(context);
   await page.goto("/scan");
+  await page.getByLabel("名刺だけを長方形に切り抜いた画像", { exact: true }).check();
 });
 
 async function photos(count: number) {

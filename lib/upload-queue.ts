@@ -33,7 +33,7 @@ export async function runUploadQueue(
     } catch (error) {
       item.status = "failed";
       item.error = error instanceof Error ? error.message : "画像の処理に失敗しました。";
-      halt = error instanceof RequestError && (
+      halt = (error instanceof Error && "code" in error && error.code === "IMAGE_CORRECTION_UNAVAILABLE") || error instanceof RequestError && (
         [401, 403, 429].includes(error.status) ||
         ["SCAN_BUSY", "OCR_QUOTA_EXCEEDED"].includes(error.code)
       );

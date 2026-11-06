@@ -9,8 +9,10 @@ const statusLabel = {
   failed: "失敗",
 };
 
-export function ImageUploadQueue({ disabled, process, onBusyChange, onSelect }: {
+export function ImageUploadQueue({ disabled, process, onBusyChange, onSelect, cropped, onCroppedChange }: {
   disabled: boolean;
+  cropped: boolean;
+  onCroppedChange: (cropped: boolean) => void;
   process: (item: UploadItem) => Promise<void>;
   onBusyChange: (busy: boolean) => void;
   onSelect: (count: number) => void;
@@ -81,6 +83,12 @@ export function ImageUploadQueue({ disabled, process, onBusyChange, onSelect }: 
   }
 
   return <div className="stack">
+    <label>
+      <input type="checkbox" checked={cropped} disabled={disabled || busy}
+        onChange={(event) => onCroppedChange(event.target.checked)} />
+      名刺だけを長方形に切り抜いた画像
+    </label>
+    <p className="hint">チェックした画像は傾き補正を省略します。背景や傾きがある写真は、チェックを外して取り込んでください。</p>
     <div className="field">
       <label htmlFor="scan-image">画像を選択</label>
       <input id="scan-image" type="file" multiple accept="image/jpeg,image/png,image/webp"

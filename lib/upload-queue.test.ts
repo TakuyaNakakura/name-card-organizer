@@ -42,6 +42,7 @@ describe("image upload queue", () => {
   });
 
   it.each([
+    Object.assign(new Error("correction runtime unavailable"), { code: "IMAGE_CORRECTION_UNAVAILABLE" }),
     new RequestError("quota", 429, "SCAN_LIMIT"),
     new RequestError("draft cap", 429, "DRAFT_LIMIT"),
     new RequestError("expired", 401),
