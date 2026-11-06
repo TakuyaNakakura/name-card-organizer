@@ -1,3 +1,10 @@
+export class RequestError extends Error {
+  constructor(message: string, readonly status: number, readonly code = "") {
+    super(message);
+    this.name = "RequestError";
+  }
+}
+
 export async function requestJson<T>(
   url: string,
   init?: RequestInit,
@@ -5,10 +12,12 @@ export async function requestJson<T>(
   const response = await fetch(url, { ...init, cache: "no-store" });
   const body = await response.json().catch(() => null);
   if (!response.ok)
-    throw new Error(
+    throw new RequestError(
       body?.error?.message ||
         body?.error ||
         `処理に失敗しました（${response.status}）。`,
+      response.status,
+      body?.code || body?.error?.code || "",
     );
   return body as T;
 }

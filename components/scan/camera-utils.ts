@@ -3,6 +3,7 @@
 import {
   areQuadsStable,
   normalizeQuadrilateral,
+  quadrilateralArea,
   scoreQuadrilateral,
   type Point,
   type Quadrilateral,
@@ -91,8 +92,13 @@ export async function loadImageElement(file: File) {
   const objectUrl = URL.createObjectURL(file);
   const image = new Image();
   image.src = objectUrl;
-  await image.decode();
-  return { image, objectUrl };
+  try {
+    await image.decode();
+    return { image, objectUrl };
+  } catch (error) {
+    URL.revokeObjectURL(objectUrl);
+    throw error;
+  }
 }
 
 function isOpenCvModule(value: unknown): value is OpenCvModule {
@@ -125,53 +131,34 @@ async function resolveOpenCvModule(candidate: unknown) {
   throw new Error("OpenCV runtime did not initialize");
 }
 
-export async function ensureCvRuntime() {
-  if (cvRuntimePromise) {
-    return cvRuntimePromise;
-  }
-
-  if (window.cv) {
-    cvRuntimePromise = resolveOpenCvModule(window.cv);
-    return cvRuntimePromise;
-  }
-
-  cvRuntimePromise = new Promise<OpenCvModule>((resolve, reject) => {
-    const existingScript = document.querySelector<HTMLScriptElement>(
-      'script[data-opencv-runtime="true"]',
-    );
-
-    const handleReady = () => {
-      void resolveOpenCvModule(window.cv).then(resolve).catch(reject);
-    };
-
-    if (existingScript) {
-      if (window.cv) {
-        handleReady();
-      } else {
-        existingScript.addEventListener("load", handleReady, { once: true });
-        existingScript.addEventListener(
-          "error",
-          () => reject(new Error("Failed to load OpenCV runtime")),
-          { once: true },
-        );
-      }
-
-      return;
-    }
-
-    const script = document.createElement("script");
-    script.src = "/vendor/opencv.js";
-    script.async = true;
-    script.dataset.opencvRuntime = "true";
-    script.addEventListener("load", handleReady, { once: true });
-    script.addEventListener(
-      "error",
-      () => reject(new Error("Failed to load OpenCV runtime")),
-      { once: true },
-    );
-    document.body.append(script);
+export function ensureCvRuntime(): Promise<OpenCvModule> {
+  if (cvRuntimePromise) return cvRuntimePromise;
+  const ready = window.cv
+    ? resolveOpenCvModule(window.cv)
+    : new Promise<OpenCvModule>((resolve, reject) => {
+        const script = document.createElement("script");
+        script.src = "/vendor/opencv.js";
+        script.async = true;
+        script.dataset.opencvRuntime = "true";
+        script.addEventListener("load", () => {
+          void resolveOpenCvModule(window.cv).then(resolve, reject);
+        }, { once: true });
+        script.addEventListener("error", reject, { once: true });
+        document.body.append(script);
+      });
+  let timeout: ReturnType<typeof setTimeout>;
+  const bounded = new Promise<OpenCvModule>((resolve, reject) => {
+    timeout = setTimeout(() => reject(new Error("OpenCV initialization timed out")), 15_000);
+    ready.then(resolve, reject);
   });
-
+  cvRuntimePromise = bounded.catch(() => {
+    cvRuntimePromise = null;
+    document.querySelector('script[data-opencv-runtime="true"]')?.remove();
+    if (!isOpenCvModule(window.cv)) delete window.cv;
+    throw Object.assign(new Error("画像補正を読み込めませんでした。通信状態を確認して、もう一度取り込んでください。"), {
+      code: "IMAGE_CORRECTION_UNAVAILABLE",
+    });
+  }).finally(() => clearTimeout(timeout));
   return cvRuntimePromise;
 }
 
@@ -223,32 +210,6 @@ function scoreQuadCandidate(
   return Number((baseScore + centeredBonus).toFixed(3));
 }
 
-function extractQuadFromMinAreaRect(
-  cv: OpenCvModule,
-  contour: any,
-): Quadrilateral | null {
-  if (typeof cv.minAreaRect !== "function" || !cv.RotatedRect?.points) {
-    return null;
-  }
-
-  try {
-    const rect = cv.minAreaRect(contour);
-    const points = cv.RotatedRect.points(rect) as Point[] | undefined;
-    if (!Array.isArray(points) || points.length !== 4) {
-      return null;
-    }
-
-    return normalizeQuadrilateral(
-      points.map((point) => ({
-        x: point.x,
-        y: point.y,
-      })),
-    );
-  } catch {
-    return null;
-  }
-}
-
 function extractBestQuadFromContour(
   cv: OpenCvModule,
   contour: any,
@@ -256,6 +217,7 @@ function extractBestQuadFromContour(
   frameHeight: number,
 ) {
   const perimeter = cv.arcLength(contour, true);
+  const contourArea = Math.abs(cv.contourArea(contour));
   let bestQuad: Quadrilateral | null = null;
   let bestScore = 0;
 
@@ -274,6 +236,8 @@ function extractBestQuadFromContour(
         continue;
       }
 
+      // A coarse approximation of a curved/noisy contour is not a card edge.
+      if (Math.abs(quadrilateralArea(quad) - contourArea) / Math.max(contourArea, 1) > 0.12) continue;
       const score = scoreQuadCandidate(quad, frameWidth, frameHeight);
       if (score > bestScore) {
         bestQuad = quad;
@@ -284,19 +248,7 @@ function extractBestQuadFromContour(
     }
   }
 
-  if (bestQuad) {
-    return { quad: bestQuad, score: bestScore };
-  }
-
-  const rotatedQuad = extractQuadFromMinAreaRect(cv, contour);
-  if (!rotatedQuad) {
-    return { quad: null, score: 0 };
-  }
-
-  return {
-    quad: rotatedQuad,
-    score: scoreQuadCandidate(rotatedQuad, frameWidth, frameHeight),
-  };
+  return { quad: bestQuad, score: bestScore };
 }
 
 function detectQuadFromMask(
@@ -315,7 +267,8 @@ function detectQuadFromMask(
       mask,
       contours,
       hierarchy,
-      cv.RETR_EXTERNAL,
+      // Background grain can join the card outline. Keep its inner boundary.
+      cv.RETR_LIST,
       cv.CHAIN_APPROX_SIMPLE,
     );
 
@@ -502,6 +455,22 @@ export async function warpPerspective(
     dstTri.delete();
     matrix.delete();
   }
+}
+
+// Detect on this immutable snapshot, never on the live analysis canvas. The
+// live frame and its dimensions can change while canvas.toBlob is pending.
+export async function correctCapturedCard(cv: OpenCvModule | null, source: HTMLCanvasElement) {
+  if (!cv) throw new Error("画像補正の準備ができていません。読み込み完了後に撮影してください。");
+  const sample = document.createElement("canvas");
+  const scale = Math.min(640 / source.width, 1);
+  sample.width = Math.max(1, Math.round(source.width * scale));
+  sample.height = Math.max(1, Math.round(source.height * scale));
+  const context = sample.getContext("2d");
+  if (!context) throw new Error("撮影画像を確認できません。撮り直してください。");
+  context.drawImage(source, 0, 0, sample.width, sample.height);
+  const quad = detectQuad(cv, sample);
+  if (!quad) throw new Error("名刺の四隅を確認できませんでした。名刺全体と周囲の余白を画面に入れて撮り直してください。");
+  return warpPerspective(cv, source, mapQuadToSource(quad, source.width, source.height, sample.width, sample.height));
 }
 
 function resizeCanvasToMaxDimension(

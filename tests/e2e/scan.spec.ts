@@ -6,6 +6,7 @@ test.beforeEach(async ({ context, page }) => {
   page.on("dialog", (dialog) => dialog.accept());
 });
 async function upload(page: import("@playwright/test").Page) {
+  await page.getByLabel("名刺だけを長方形に切り抜いた画像", { exact: true }).check();
   const before = await page.locator(".draft-card").count();
   const image = await sharp({
     create: { width: 800, height: 500, channels: 3, background: "#fff" },
@@ -104,6 +105,7 @@ test("mode cannot change during OCR, then results remain visible", async ({
     await route.continue();
   });
   await page.goto("/scan");
+  await page.getByLabel("名刺だけを長方形に切り抜いた画像", { exact: true }).check();
   const image = await sharp({
     create: { width: 400, height: 250, channels: 3, background: "#fff" },
   })

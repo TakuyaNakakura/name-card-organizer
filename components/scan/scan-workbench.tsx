@@ -1,26 +1,27 @@
 "use client";
 import Link from "next/link";
-import { useEffect, useRef, useState, type ChangeEvent } from "react";
+import { useEffect, useRef, useState } from "react";
 import { areQuadsStable, type Quadrilateral } from "@/lib/card-detection";
 import {
   captured,
   freshCaptureGate,
   observeCaptureGate,
 } from "@/lib/scan-state";
-import { jsonBody, requestJson } from "@/lib/api-client";
+import { jsonBody, requestJson, RequestError } from "@/lib/api-client";
 import { contactFieldErrors } from "@/lib/contact-fields";
 import type { TeamDraft, TeamCard } from "@/lib/team-types";
 import { DraftReview } from "@/components/drafts/draft-review";
+import { ImageUploadQueue } from "./image-upload-queue";
+import type { UploadItem } from "@/lib/upload-queue";
 import {
   createUploadBlob,
+  correctCapturedCard,
   detectQuad,
   ensureCvRuntime,
   getCameraFailureMessage,
   loadImageElement,
   mapQuadToPreviewDisplay,
-  mapQuadToSource,
   requestCameraStream,
-  warpPerspective,
 } from "./camera-utils";
 
 export function ScanWorkbench({
@@ -36,13 +37,13 @@ export function ScanWorkbench({
     gate = useRef({ ...freshCaptureGate }),
     inFlight = useRef(false),
     stable = useRef({ quad: null as Quadrilateral | null, count: 0, since: 0 });
-  const activeQuad = useRef<Quadrilateral | null>(null),
-    captureAction = useRef<() => void>(() => {}),
+  const captureAction = useRef<() => void>(() => {}),
     mounted = useRef(true);
   const [camera, setCamera] = useState<"idle" | "starting" | "live" | "error">(
       "idle",
     ),
     [cvStatus, setCvStatus] = useState("読み込み中");
+  const [imagesAreCropped, setImagesAreCropped] = useState(false);
   const [mode, setMode] = useState<"single" | "batch">("single"),
     [paused, setPaused] = useState(false),
     [busy, setBusy] = useState(false),
@@ -89,7 +90,7 @@ export function ScanWorkbench({
       })
       .catch(() => {
         if (mounted.current)
-          setCvStatus("読み込み失敗。手動撮影・画像選択は利用できます");
+          setCvStatus("画像補正の読み込み失敗。通信状態を確認して、取り込みを再試行してください");
       });
     return () => {
       mounted.current = false;
@@ -137,11 +138,10 @@ export function ScanWorkbench({
       try {
         next = detectQuad(cv.current, canvas);
       } catch {
-        setCvStatus("枠検出に失敗。手動撮影は利用できます");
+        setCvStatus("枠検出に失敗。名刺全体を画面に入れて撮り直してください");
         return;
       }
       setQuad(next);
-      activeQuad.current = next;
       gate.current = observeCaptureGate(gate.current, Boolean(next));
       setWaiting(gate.current.waitingForRemoval);
       const previous = stable.current;
@@ -225,15 +225,20 @@ export function ScanWorkbench({
       setError(getCameraFailureMessage(e));
     }
   }
-  async function submitScan(original: Blob, corrected: Blob) {
+  async function submitScan(original: Blob, corrected: Blob, clientScanId = crypto.randomUUID()) {
     const form = new FormData();
-    form.set("clientScanId", crypto.randomUUID());
+    form.set("clientScanId", clientScanId);
     form.set("originalImage", original, "original.jpg");
     form.set("correctedImage", corrected, "corrected.jpg");
     const draft = await requestJson<TeamDraft>("/api/scans", {
       method: "POST",
       body: form,
     });
+    receiveDraft(draft);
+  }
+  function receiveDraft(draft: TeamDraft) {
+    if (draft.status === "confirmed") return;
+    if (draft.status !== "ready") throw new Error(draft.errorMessage || "読み取りがまだ完了していません。しばらくしてから再開してください。");
     if (mounted.current) {
       setDrafts((list) => [draft, ...list.filter((d) => d.id !== draft.id)]);
       setSelectedIds((old) => new Set([...old, draft.id]));
@@ -266,24 +271,9 @@ export function ScanWorkbench({
       const context = source.getContext("2d");
       if (!context) throw new Error("撮影画像を取得できません。");
       context.drawImage(v, 0, 0);
-      const original = await createUploadBlob(source),
-        q = activeQuad.current;
-      const corrected =
-        q && cv.current && analysis.current
-          ? await createUploadBlob(
-              await warpPerspective(
-                cv.current,
-                source,
-                mapQuadToSource(
-                  q,
-                  source.width,
-                  source.height,
-                  analysis.current.width,
-                  analysis.current.height,
-                ),
-              ),
-            )
-          : original;
+      const correctedCanvas = await correctCapturedCard(cv.current, source);
+      const original = await createUploadBlob(source);
+      const corrected = await createUploadBlob(correctedCanvas);
       setMessage("名刺を撮影しました。読み取り中です…");
       await submitScan(original, corrected);
     } catch (e) {
@@ -298,65 +288,59 @@ export function ScanWorkbench({
   captureAction.current = () => {
     void capture();
   };
-  async function upload(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    event.target.value = "";
-    if (!file || inputBlocked || inFlight.current) return;
-    inFlight.current = true;
-    setBusy(true);
-    setError("");
-    gate.current = captured();
-    setWaiting(true);
+  async function uploadImage(item: UploadItem) {
+    if (!item.file) return;
+    // Reconcile a lost response before doing any new billable OCR work.
+    if (item.attempts > 1) {
+      const response = await requestJson<{ items: TeamDraft[] }>("/api/drafts");
+      const existing = response.items.find((draft) => draft.clientScanId === item.clientScanId);
+      if (existing) {
+        if (existing.status === "ready" || existing.status === "confirmed") {
+          receiveDraft(existing);
+          return;
+        }
+        if (existing.status === "processing" || existing.correctedImageUrl) {
+          try {
+            receiveDraft(await requestJson<TeamDraft>(`/api/drafts/${existing.id}/retry`, { method: "POST" }));
+            return;
+          } catch (error) {
+            // An asset row can exist even when the storage upload failed.
+            if (!(error instanceof RequestError) || error.code !== "IMAGE_UNAVAILABLE") throw error;
+          }
+        }
+        // Quota/validation failures may not have stored an image to retry.
+        // Retire that failed reservation before re-uploading under a fresh key.
+        await requestJson<void>(`/api/drafts/${existing.id}`, { method: "DELETE" });
+        removeDraft(existing.id);
+        item.clientScanId = crypto.randomUUID();
+      }
+    }
+    if (!["image/jpeg", "image/png", "image/webp"].includes(item.file.type))
+      throw new Error("JPEG・PNG・WebP形式の画像を選択してください。");
+    const { image, objectUrl } = await loadImageElement(item.file);
     try {
-      const { image, objectUrl } = await loadImageElement(file);
-      setPreview(objectUrl);
       const source = document.createElement("canvas");
-      const uploadScale = Math.min(
-        1800 / image.naturalWidth,
-        1800 / image.naturalHeight,
-        1,
-      );
+      const uploadScale = Math.min(1800 / image.naturalWidth, 1800 / image.naturalHeight, 1);
       source.width = Math.max(1, Math.round(image.naturalWidth * uploadScale));
-      source.height = Math.max(
-        1,
-        Math.round(image.naturalHeight * uploadScale),
-      );
+      source.height = Math.max(1, Math.round(image.naturalHeight * uploadScale));
       const ctx = source.getContext("2d");
       if (!ctx) throw new Error("画像を取得できません。");
       ctx.drawImage(image, 0, 0, source.width, source.height);
-      const original = await createUploadBlob(source);
-      let corrected = original;
-      if (cv.current) {
-        const small = document.createElement("canvas"),
-          scale = Math.min(640 / source.width, 1);
-        small.width = Math.round(source.width * scale);
-        small.height = Math.round(source.height * scale);
-        small
-          .getContext("2d")
-          ?.drawImage(image, 0, 0, small.width, small.height);
-        const q = detectQuad(cv.current, small);
-        if (q)
-          corrected = await createUploadBlob(
-            await warpPerspective(
-              cv.current,
-              source,
-              mapQuadToSource(
-                q,
-                source.width,
-                source.height,
-                small.width,
-                small.height,
-              ),
-            ),
-          );
+      let correctedCanvas = source;
+      if (!imagesAreCropped) {
+        const runtime = await ensureCvRuntime();
+        if (!mounted.current) return;
+        cv.current = runtime;
+        setCvStatus("読み込み完了");
+        correctedCanvas = await correctCapturedCard(runtime, source);
       }
-      await submitScan(original, corrected);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "画像の処理に失敗しました。");
-      await refreshDrafts();
+      const original = await createUploadBlob(source);
+      const corrected = await createUploadBlob(correctedCanvas);
+      if (!mounted.current) return;
+      setPreview(URL.createObjectURL(corrected));
+      await submitScan(original, corrected, item.clientScanId);
     } finally {
-      inFlight.current = false;
-      setBusy(false);
+      URL.revokeObjectURL(objectUrl);
     }
   }
   async function registerAll() {
@@ -531,22 +515,28 @@ export function ScanWorkbench({
               </button>
               <button
                 className="secondary-button"
-                disabled={inputBlocked || camera !== "live"}
+                disabled={inputBlocked || camera !== "live" || !cv.current}
                 onClick={() => void capture()}
               >
                 手動で撮影
               </button>
             </div>
-            <div className="field">
-              <label htmlFor="scan-image">画像を選択</label>
-              <input
-                id="scan-image"
-                type="file"
-                accept="image/jpeg,image/png,image/webp"
-                disabled={inputBlocked}
-                onChange={(e) => void upload(e)}
-              />
-            </div>
+            <ImageUploadQueue
+              disabled={inputBlocked}
+              process={uploadImage}
+              cropped={imagesAreCropped}
+              onCroppedChange={setImagesAreCropped}
+              onSelect={(count) => { if (count > 1) setMode("batch"); }}
+              onBusyChange={(active) => {
+                inFlight.current = active;
+                setBusy(active);
+                if (active) {
+                  setError("");
+                  gate.current = captured();
+                  setWaiting(true);
+                }
+              }}
+            />
             <p className="hint">
               OpenCV：{cvStatus}
               <br />

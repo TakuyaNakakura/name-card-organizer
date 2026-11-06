@@ -61,3 +61,26 @@ it("preserves provider error codes for safe scan error classification", async ()
     }),
   ).rejects.toMatchObject({ code: 7 });
 });
+
+it("uses Vision breaks instead of inserting spaces between Japanese words", async () => {
+  const word = (text: string, type?: number, isPrefix = false) => ({
+    symbols: [...text].map((character, index) => ({
+      text: character,
+      ...(index === text.length - 1 && type !== undefined
+        ? { property: { detectedBreak: { type, isPrefix } } }
+        : {}),
+    })),
+  });
+  const rawText = "株式会社サンプル\nJohn Smith\n営業課";
+  mocks.annotate.mockResolvedValue([{ responses: [{ fullTextAnnotation: {
+    text: rawText,
+    pages: [{ blocks: [{ paragraphs: [{ words: [
+      word("株式"), word("会社"), word("サンプル", 5),
+      word("John", 1), word("Smith", 3), word("営業"), word("課"),
+    ] }] }] }],
+  } }] }]);
+  const { getOcrClient } = await import("@/lib/ocr");
+  const result = await getOcrClient().recognize({ buffer: Buffer.from("image"), mimeType: "image/jpeg" });
+  expect(result.rawText).toBe(rawText);
+  expect(result.blocks[0].text).toBe(rawText);
+});

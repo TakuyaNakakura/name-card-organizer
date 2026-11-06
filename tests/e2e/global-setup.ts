@@ -15,8 +15,16 @@ export default async function setup() {
     const y = Buffer.alloc(width * height, 30),
       uv = Buffer.alloc((width * height) / 2, 128);
     if (frame < 50 || frame > 60) {
-      for (let row = 130; row < 350; row++)
-        y.fill(235, row * width + 130, row * width + 510);
+      const angle = (frame < 50 ? -22 : 22) * Math.PI / 180;
+      const cos = Math.cos(angle), sin = Math.sin(angle);
+      for (let row = 0; row < height; row++) {
+        for (let column = 0; column < width; column++) {
+          const x = (column - 320) * cos + (row - 240) * sin;
+          const localY = -(column - 320) * sin + (row - 240) * cos;
+          if (Math.abs(x) < 190 && Math.abs(localY) < 110)
+            y[row * width + column] = Math.abs(x) < 130 && localY > -40 && localY < -34 ? 50 : 235;
+        }
+      }
     }
     frames.push(Buffer.from("FRAME\n"), y, uv);
   }
