@@ -509,6 +509,22 @@ export async function warpPerspective(
   }
 }
 
+// Detect on this immutable snapshot, never on the live analysis canvas. The
+// live frame and its dimensions can change while canvas.toBlob is pending.
+export async function correctCapturedCard(cv: OpenCvModule | null, source: HTMLCanvasElement) {
+  if (!cv) throw new Error("画像補正の準備ができていません。読み込み完了後に撮影してください。");
+  const sample = document.createElement("canvas");
+  const scale = Math.min(640 / source.width, 1);
+  sample.width = Math.max(1, Math.round(source.width * scale));
+  sample.height = Math.max(1, Math.round(source.height * scale));
+  const context = sample.getContext("2d");
+  if (!context) throw new Error("撮影画像を確認できません。撮り直してください。");
+  context.drawImage(source, 0, 0, sample.width, sample.height);
+  const quad = detectQuad(cv, sample);
+  if (!quad) throw new Error("名刺の四隅を確認できませんでした。名刺全体と周囲の余白を画面に入れて撮り直してください。");
+  return warpPerspective(cv, source, mapQuadToSource(quad, source.width, source.height, sample.width, sample.height));
+}
+
 function resizeCanvasToMaxDimension(
   sourceCanvas: HTMLCanvasElement,
   maxDimension: number,
