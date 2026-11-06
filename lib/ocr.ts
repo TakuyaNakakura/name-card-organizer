@@ -57,9 +57,20 @@ function blockToText(block: protos.google.cloud.vision.v1.IBlock) {
     .map((paragraph) =>
       (paragraph.words ?? [])
         .map((word) =>
-          (word.symbols ?? []).map((symbol) => symbol.text ?? "").join(""),
+          (word.symbols ?? []).map((symbol) => {
+            const detectedBreak = symbol.property?.detectedBreak;
+            const type = detectedBreak?.type;
+            const separator = type === 1 || type === 2 || type === "SPACE" || type === "SURE_SPACE"
+              ? " "
+              : type === 3 || type === 5 || type === "EOL_SURE_SPACE" || type === "LINE_BREAK"
+                ? "\n"
+                : type === 4 || type === "HYPHEN" ? "-\n" : "";
+            return detectedBreak?.isPrefix
+              ? separator + (symbol.text ?? "")
+              : (symbol.text ?? "") + separator;
+          }).join(""),
         )
-        .join(" "),
+        .join(""),
     )
     .join("\n")
     .trim();

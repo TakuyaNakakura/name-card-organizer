@@ -4,6 +4,26 @@ import { extractContactInfo } from "@/lib/contact-parser";
 import type { OcrResult } from "@/lib/types";
 
 describe("extractContactInfo", () => {
+  it("cleans Japanese suggestions before scoring and leaves the OCR source unchanged", () => {
+    const texts = ["株 式 会 社 サ ン プ ル", "山 田 太 郎", "営 業 課 課 長"];
+    const ocr: OcrResult = {
+      rawText: texts.join("\n") + "\ntaro\u200b@example.test",
+      overallConfidence: 0.95,
+      blocks: texts.map((text, index) => ({
+        text,
+        confidence: 0.95,
+        bounds: { x: 10, y: index * 60, width: 250, height: index === 1 ? 44 : 28 },
+      })),
+    };
+    const before = structuredClone(ocr);
+    expect(extractContactInfo(ocr)).toMatchObject({
+      fullName: "山田太郎",
+      organization: "株式会社サンプル",
+      jobTitle: "営業課課長",
+      email: "taro@example.test",
+    });
+    expect(ocr).toEqual(before);
+  });
   it("extracts the strongest name, organization, title, and primary email", () => {
     const ocr: OcrResult = {
       rawText: "ACME Inc.\nPlatform Division\nJane Doe\nHead of Sales\njane@example.com",

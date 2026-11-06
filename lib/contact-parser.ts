@@ -1,4 +1,5 @@
 import type { ContactExtractionResult, OcrBlock, OcrResult } from "@/lib/types";
+import { normalizeOcrLine } from "@/lib/ocr-text";
 
 const EMAIL_REGEX = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
 const EMAIL_TEST_REGEX = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
@@ -25,7 +26,7 @@ interface OcrLine extends OcrBlock {
 }
 
 function normalizeText(text: string) {
-  return text.trim().replace(/\s+/g, " ");
+  return normalizeOcrLine(text);
 }
 
 function extractLines(blocks: OcrBlock[]): OcrLine[] {
@@ -281,7 +282,7 @@ function buildOrganizationCandidates(lines: OcrLine[], documentHeight: number) {
       nextLooksLikeOrganization &&
       verticalGap <= Math.max(current.bounds.height, next.bounds.height) * 1.4
     ) {
-      const combined = `${currentText} ${nextText}`;
+      const combined = normalizeText(`${currentText} ${nextText}`);
       const currentScore = scoreOrganizationCandidate(
         currentText,
         current,
@@ -315,7 +316,9 @@ function pickBestCandidate(
 
 export function extractContactInfo(ocr: OcrResult): ContactExtractionResult {
   const warnings: string[] = [];
-  const { primary: email, all: allEmails } = extractEmail(ocr.rawText);
+  const { primary: email, all: allEmails } = extractEmail(
+    ocr.rawText.replace(/[\u200b\u2060\ufeff]/g, ""),
+  );
 
   if (!email) {
     warnings.push("メールアドレスを検出できませんでした");
