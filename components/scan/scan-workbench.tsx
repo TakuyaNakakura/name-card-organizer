@@ -21,9 +21,7 @@ import {
   getCameraFailureMessage,
   loadImageElement,
   mapQuadToPreviewDisplay,
-  mapQuadToSource,
   requestCameraStream,
-  warpPerspective,
 } from "./camera-utils";
 
 export function ScanWorkbench({
@@ -45,6 +43,7 @@ export function ScanWorkbench({
       "idle",
     ),
     [cvStatus, setCvStatus] = useState("読み込み中");
+  const [imagesAreCropped, setImagesAreCropped] = useState(false);
   const [mode, setMode] = useState<"single" | "batch">("single"),
     [paused, setPaused] = useState(false),
     [busy, setBusy] = useState(false),
@@ -91,7 +90,7 @@ export function ScanWorkbench({
       })
       .catch(() => {
         if (mounted.current)
-          setCvStatus("画像補正の読み込み失敗。再読み込みするか、画像選択を利用してください");
+          setCvStatus("画像補正の読み込み失敗。通信状態を確認して、取り込みを再試行してください");
       });
     return () => {
       mounted.current = false;
@@ -327,18 +326,16 @@ export function ScanWorkbench({
       const ctx = source.getContext("2d");
       if (!ctx) throw new Error("画像を取得できません。");
       ctx.drawImage(image, 0, 0, source.width, source.height);
-      const original = await createUploadBlob(source);
-      let corrected = original;
-      if (cv.current) {
-        const small = document.createElement("canvas"), scale = Math.min(640 / source.width, 1);
-        small.width = Math.round(source.width * scale);
-        small.height = Math.round(source.height * scale);
-        small.getContext("2d")?.drawImage(source, 0, 0, small.width, small.height);
-        const q = detectQuad(cv.current, small);
-        if (q) corrected = await createUploadBlob(await warpPerspective(
-          cv.current, source, mapQuadToSource(q, source.width, source.height, small.width, small.height),
-        ));
+      let correctedCanvas = source;
+      if (!imagesAreCropped) {
+        const runtime = await ensureCvRuntime();
+        if (!mounted.current) return;
+        cv.current = runtime;
+        setCvStatus("読み込み完了");
+        correctedCanvas = await correctCapturedCard(runtime, source);
       }
+      const original = await createUploadBlob(source);
+      const corrected = await createUploadBlob(correctedCanvas);
       if (!mounted.current) return;
       setPreview(URL.createObjectURL(corrected));
       await submitScan(original, corrected, item.clientScanId);
@@ -527,6 +524,8 @@ export function ScanWorkbench({
             <ImageUploadQueue
               disabled={inputBlocked}
               process={uploadImage}
+              cropped={imagesAreCropped}
+              onCroppedChange={setImagesAreCropped}
               onSelect={(count) => { if (count > 1) setMode("batch"); }}
               onBusyChange={(active) => {
                 inFlight.current = active;
